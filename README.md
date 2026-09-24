@@ -21,7 +21,8 @@ L'exécutable est dans `bin\Release\netcoreapp3.1\` (`MouseSmooth.exe`, avec
 Lancer `MouseSmooth.exe` : une icône apparaît dans le systray.
 
 - **Pastille verte** : lissage actif — **pastille rouge** : lissage désactivé.
-- **Menu contextuel** (clic droit) : case *Activé* (toggle), *Réglages…*, *Quitter*.
+- **Menu contextuel** (clic droit) : case *Activé* (toggle), *Réglages…*,
+  *Calibrage…*, *Quitter*.
 - **Double-clic** sur l'icône : ouvrir les réglages.
 - **Ctrl+Alt+M** : bascule actif/inactif depuis n'importe quelle application.
 
@@ -32,7 +33,7 @@ Lancer `MouseSmooth.exe` : une icône apparaît dans le systray.
 | Sensibilité X | gain appliqué aux deltas horizontaux (2.0 = distance doublée) | 0.1 – 3.0 |
 | Sensibilité Y | gain appliqué aux deltas verticaux | 0.1 – 3.0 |
 | Lissage | force du filtrage (0 = natif, 0.95 = très filtré) | 0 – 0.95 |
-| Seuil de tremblement | vitesse (px/s) en dessous de laquelle le curseur reste immobile | 0 (désactivé) – 200 |
+| Seuil de tremblement | écart de déplacement au-delà duquel le suivi reprend (en dessous : curseur figé) | 0 (désactivé) – 200 |
 | Bande morte X/Y | micro-déplacements résiduels ignorés (px) | 0 – 20 |
 
 Les réglages s'appliquent en temps réel et sont persistés dans
@@ -44,13 +45,14 @@ Les réglages s'appliquent en temps réel et sont persistés dans
    requise). Les événements `WM_MOUSEMOVE` non injectés sont interceptés ;
    clics, molette et injections (autres logiciels d'automatisation) passent tels quels.
 2. **Filtre** (`MouseFilter.cs`) : les deltas bruts sont intégrés avec la
-   sensibilité par axe dans une position virtuelle ; un suivi lent (passe-bas,
-   constante de temps 250 ms) sépare le mouvement volontaire du tremblement ;
-   **le lissage ne démarre qu'au-delà du seuil de tremblement** : la vitesse
-   *soutenue* du suivi lent décide du déverrouillage — un tremblement (la main
-   oscille sur place) a une vitesse soutenue quasi nulle et laisse le curseur
-   figé, tandis qu'un vrai geste la fait dépasser le seuil en quelques dizaines
-   de millisecondes ;
+   sensibilité par axe dans une position « virtuelle » V ; une position
+   « engagée » C poursuit V via un passe-bas (constante 250 ms) **seulement
+   quand l'écart V−C dépasse le seuil de tremblement** (porte avec hystérésis
+   spatiale et lissage temporel 120 ms). Le discriminant est le déplacement
+   résiduel, pas la vitesse : un tremblement (la main oscille sur place) garde
+   l'écart sous le seuil =&gt; C reste gelée et le curseur aussi ; un geste fait
+   croître l'écart sans retour =&gt; la porte s'ouvre et C rattrape V
+   progressivement, sans saut ;
 3. **Vitesse d'origine préservée** : le mélange filtré/natif est adaptatif à la
    vitesse — lent = très filtré (la main tremble surtout à l'arrêt), rapide =
    quasiment natif. Le gain pointeur, le DPI et l'accélération Windows restent
@@ -78,7 +80,36 @@ suivi d'un geste lent (distance d'origine préservée), application des gains X/
 seuil de tremblement (figeage sous le seuil, déblocage au-dessus), ré-ancrage
 sur saut externe et sur trou temporel.
 
+## Calibrage assisté
+
+Menu systray → *Calibrage…* : posez la main sur la souris sans intention de
+mouvement ; après 3 s de préparation, le tremblement réel est mesuré pendant
+5 s sur les événements **bruts** du hook (avant tout lissage) : la mesure
+reflète le matériel, pas le comportement filtré. L'assistant en déduit un
+seuil (40 % au-dessus du tremblement mesuré), un lissage et une bande morte,
+applicables en un clic — ils prennent effet immédiatement et sont persistés.
+
+Recommandation : ne bougez pas volontairement pendant la mesure (le résultat
+serait surestimé) ; recommencez si besoin.
+
+## Visualiseur du filtre
+
+La fenêtre de réglages affiche en temps réel, pour chaque axe :
+
+- le **disque gris** : position *engagée* C (ce que le filtre a validé) ;
+- le **triangle** : position *virtuelle* V (consigne matérielle) — orange
+  quand la porte est fermée (tremblement absorbé), vert en suivi natif ;
+- la **jauge** : ouverture de la porte (0 = gelé, 100 % = suivi natif).
+
+Utilisation typique : main posée, le triangle reste orange et le curseur est
+immobile ; lors d'un geste, il passe vert et le disque le rattrape. Si un
+geste lent reste bloqué, baissez le seuil ; si la main posée fait glisser le
+curseur, augmentez-le.
+
 ## Réglage conseillé
+
+Le plus simple est l'assistant de calibrage (voir ci-dessus). Pour un réglage
+manuel :
 
 1. Mettre *Lissage* vers 0,8 et *Seuil de tremblement* à 0 ;
 2. monter progressivement le seuil jusqu'à ce que la main posée (sans intention
