@@ -19,11 +19,13 @@ namespace MouseSmooth
     {
         private readonly Func<FilterState> _getState;
         private readonly Func<bool> _getActive;
+        private readonly Func<bool> _getPassThrough;
 
-        public FilterVisualizer(Func<FilterState> getState, Func<bool> getActive)
+        public FilterVisualizer(Func<FilterState> getState, Func<bool> getActive, Func<bool> getPassThrough)
         {
             _getState = getState;
             _getActive = getActive;
+            _getPassThrough = getPassThrough;
             DoubleBuffered = true;
             ResizeRedraw = true;
             Height = 118;
@@ -36,12 +38,14 @@ namespace MouseSmooth
             g.SmoothingMode = SmoothingMode.AntiAlias;
             g.Clear(SystemColors.Control);
 
+            if (_getPassThrough())
+            {
+                DrawCentered(g, "Mode utilisateur valide : souris 100 % native, aucun traitement");
+                return;
+            }
             if (!_getActive())
             {
-                using var f = new Font("Segoe UI", 9f, FontStyle.Italic);
-                using var b = new SolidBrush(Color.DimGray);
-                var sz = g.MeasureString("Lissage inactif", f);
-                g.DrawString("Lissage inactif", f, b, (Width - sz.Width) / 2, (Height - sz.Height) / 2);
+                DrawCentered(g, "Lissage inactif");
                 return;
             }
 
@@ -108,6 +112,14 @@ namespace MouseSmooth
                 var sz = g.MeasureString(txt, f);
                 g.DrawString(txt, f, b, gaugeRect.Left - sz.Width - 8, cy - sz.Height / 2);
             }
+        }
+
+        private void DrawCentered(Graphics g, string text)
+        {
+            using var f = new Font("Segoe UI", 9f, FontStyle.Italic);
+            using var b = new SolidBrush(Color.DimGray);
+            var sz = g.MeasureString(text, f);
+            g.DrawString(text, f, b, (Width - sz.Width) / 2, (Height - sz.Height) / 2);
         }
 
         private static float Clamp01(float x) => x < 0f ? 0f : (x > 1f ? 1f : x);

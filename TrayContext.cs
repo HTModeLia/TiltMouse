@@ -15,6 +15,7 @@ namespace MouseSmooth
         private readonly HiddenWindow _window;
         private readonly NotifyIcon _tray;
         private SettingsForm _settings;
+        private ToolStripMenuItem _miValidMode;
 
         public TrayContext()
         {
@@ -27,17 +28,20 @@ namespace MouseSmooth
             _window.HotkeyPressed += Toggle;
             _window.Show(); // garde le handle vivant pour le raccourci global (fenêtre hors écran)
 
-            Icon icon = MakeIcon(_config.Enabled);
+            Icon icon = MakeIcon(_config.Enabled, _config.ValidMode);
             _tray = new NotifyIcon
             {
                 Icon = icon,
-                Text = "MouseSmooth — actif",
+                Text = TrayText(),
                 Visible = true
             };
             _tray.DoubleClick += (s, e) => ShowSettings();
 
             var menu = new ContextMenuStrip();
             menu.Items.Add("Activé", null, (s, e) => Toggle());
+            _miValidMode = new ToolStripMenuItem("Utilisateur valide") { Checked = _config.ValidMode };
+            _miValidMode.Click += (s, e) => SetValidMode(!_config.ValidMode);
+            menu.Items.Add(_miValidMode);
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add("Réglages…", null, (s, e) => ShowSettings());
             menu.Items.Add("Calibrage…", null, (s, e) => ShowCalibration());
@@ -63,14 +67,43 @@ namespace MouseSmooth
         {
             _config.Enabled = !_config.Enabled;
             _engine.SetEnabled(_config.Enabled);
-            Icon oldIcon = _tray.Icon;
-            _tray.Icon = MakeIcon(_config.Enabled);
-            if (oldIcon != null) { NativeMethods.DestroyIcon(oldIcon.Handle); oldIcon.Dispose(); }
-            _tray.Text = _config.Enabled ? "MouseSmooth — actif" : "MouseSmooth — désactivé";
-            if (_tray.ContextMenuStrip != null)
-                ((ToolStripMenuItem)_tray.ContextMenuStrip.Items[0]).Checked = _config.Enabled;
+            RefreshVisuals();
             SettingsStore.Save(_config);
+        }
+
+        /// <summary>Texte d'info-bulle selon l'état (utilisateur valide / actif / désactivé).</summary>
+        private string TrayText() =>
+            _config.ValidMode ? "MouseSmooth — utilisateur valide (natif)"
+            : _config.Enabled ? "MouseSmooth — actif"
+            : "MouseSmooth — désactivé";
+
+        /// <summary>Met à jour icône, info-bulle et coches du menu selon la config.</summary>
+        private void RefreshVisuals()
+        {
+            Icon oldIcon = _tray.Icon;
+            _tray.Icon = MakeIcon(_config.Enabled, _config.ValidMode);
+            if (oldIcon != null) { NativeMethods.DestroyIcon(oldIcon.Handle); oldIcon.Dispose(); }
+            _tray.Text = TrayText();
+            if (_tray.ContextMenuStrip != null)
+            {
+                ((ToolStripMenuItem)_tray.ContextMenuStrip.Items[0]).Checked = _config.Enabled;
+                ((ToolStripMenuItem)_tray.ContextMenuStrip.Items[1]).Checked = _config.ValidMode;
+            }
             _settings?.SyncToggle(_config.Enabled);
+        }
+
+        /// <summary>
+        /// Mode utilisateur valide : le hook RESTE installé mais ne traite plus rien
+        /// (pass-through natif) ; le profil tremblant est conservé intact et revient
+        /// dès la sortie du mode. Bascule instantanée, sans réinstallation.
+        /// </summary>
+        private void SetValidMode(bool on)
+        {
+            _config.ValidMode = on;
+            _engine.ApplyConfig(_config);
+            SettingsStore.Save(_config);
+            RefreshVisuals();
+            _settings?.Reload(_config);
         }
 
         /// <summary>
@@ -100,14 +133,10 @@ namespace MouseSmooth
                 _settings = new SettingsForm(_config, _engine);
                 _settings.Changed += cfg =>
                 {
+                    _config.CopyFrom(cfg); // répercute les valeurs du formulaire
                     _engine.ApplyConfig(cfg);
                     _engine.SetEnabled(cfg.Enabled);
-                    Icon oldIcon = _tray.Icon;
-                    _tray.Icon = MakeIcon(cfg.Enabled);
-                    if (oldIcon != null) { NativeMethods.DestroyIcon(oldIcon.Handle); oldIcon.Dispose(); }
-                    _tray.Text = cfg.Enabled ? "MouseSmooth — actif" : "MouseSmooth — désactivé";
-                    if (_tray.ContextMenuStrip != null)
-                        ((ToolStripMenuItem)_tray.ContextMenuStrip.Items[0]).Checked = cfg.Enabled;
+                    RefreshVisuals();
                 };
             }
             _settings.Show();
@@ -118,12 +147,7 @@ namespace MouseSmooth
         private void OnEngineAutoDisabled()
         {
             _config.Enabled = false;
-            Icon oldIcon = _tray.Icon;
-            _tray.Icon = MakeIcon(false);
-            if (oldIcon != null) { NativeMethods.DestroyIcon(oldIcon.Handle); oldIcon.Dispose(); }
-            _tray.Text = "MouseSmooth — désactivé";
-            if (_tray.ContextMenuStrip != null)
-                ((ToolStripMenuItem)_tray.ContextMenuStrip.Items[0]).Checked = false;
+            RefreshVisuals();
             SettingsStore.Save(_config);
             _tray.ShowBalloonTip(4000, "MouseSmooth désactivé",
                 "Le repositionnement du curseur a échoué de façon répétée (session verrouillée, " +
@@ -142,15 +166,21 @@ namespace MouseSmooth
             Application.Exit();
         }
 
-        /// <summary>Icône systray générée à la volée : pointeur blanc sur pastille verte/rouge.</summary>
-        private static Icon MakeIcon(bool enabled)
+        /// <summary>
+        /// Icône systray générée à la volée (pointeur blanc sur pastille) :
+        /// bleue = utilisateur valide (natif), verte = actif, rouge = désactivé.
+        /// </summary>
+        private static Icon MakeIcon(bool enabled, bool validMode)
         {
             using (var bmp = new Bitmap(32, 32))
             using (var g = Graphics.FromImage(bmp))
             {
                 g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-                using (var bg = new SolidBrush(enabled ? Color.FromArgb(46, 160, 67) : Color.FromArgb(170, 40, 40)))
-                    g.FillEllipse(bg, 1, 1, 30, 30);
+                Color bg = validMode ? Color.FromArgb(31, 111, 235)
+                         : enabled   ? Color.FromArgb(46, 160, 67)
+                         : Color.FromArgb(170, 40, 40);
+                using (var brush = new SolidBrush(bg))
+                    g.FillEllipse(brush, 1, 1, 30, 30);
                 using (var pen = new Pen(Color.White, 3f))
                 {
                     g.DrawLine(pen, 7, 9, 7, 23);                       // tige verticale

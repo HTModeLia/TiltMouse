@@ -32,6 +32,9 @@ namespace MouseSmooth
 
         public bool Enabled => _enabled;
 
+        /// <summary>Vrai si les événements passent sans aucun traitement (mode natif).</summary>
+        public bool PassThrough => _passThrough;
+
         private bool _calibrating;
 
         /// <summary>Vrai pendant une session de calibrage (les bruts sont enregistrés).</summary>
@@ -87,6 +90,15 @@ namespace MouseSmooth
         public void ApplyConfig(SmoothConfig config)
         {
             _config = config.Clone();
+
+            // Mode utilisateur valide : le hook reste installé (bascule instantanée,
+            // calibrage et visualiseur toujours possibles) mais chaque événement est
+            // rendu au système via CallNextHookEx, sans le moindre traitement.
+            if (_config.ValidMode)
+            {
+                _passThrough = true;
+                return;
+            }
 
             _passThrough =
                 _config.Smoothing <= 0.0 &&

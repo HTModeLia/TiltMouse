@@ -9,6 +9,13 @@ namespace MouseSmooth
     {
         public bool Enabled { get; set; } = true;
 
+        /// <summary>
+        /// Mode utilisateur valide : le hook RESTE installé mais aucun traitement
+        /// n'est appliqué (pass-through). Le profil tremblant est conservé intact
+        /// et revient dès la sortie du mode.
+        /// </summary>
+        public bool ValidMode { get; set; } = false;
+
         /// <summary>Sensibilité axe X (1.0 = vitesse native).</summary>
         public double GainX { get; set; } = 1.0;
 
@@ -45,6 +52,7 @@ namespace MouseSmooth
         {
             var d = new SmoothConfig();
             Enabled = d.Enabled;
+            ValidMode = d.ValidMode;
             GainX = d.GainX;
             GainY = d.GainY;
             Smoothing = d.Smoothing;

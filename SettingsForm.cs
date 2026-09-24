@@ -14,7 +14,7 @@ namespace MouseSmooth
         private readonly SmoothConfig _saved;         // dernier état enregistré
         private readonly MouseHookEngine _engine;     // source d'état du visualiseur
 
-        private CheckBox _chkEnabled;
+        private CheckBox _chkEnabled, _chkValid;
         private NumericUpDown _numGainX, _numGainY, _numSmooth, _numTremor, _numDeadX, _numDeadY;
         private FilterVisualizer _visualizer;
         private Button _btnOk, _btnCancel, _btnDefaults;
@@ -47,7 +47,7 @@ namespace MouseSmooth
                 Dock = DockStyle.Fill,
                 Padding = new Padding(12),
                 ColumnCount = 3,
-                RowCount = 7,
+                RowCount = 8,
                 AutoSize = true
             };
             table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 55));
@@ -58,12 +58,20 @@ namespace MouseSmooth
             table.Controls.Add(_chkEnabled, 0, 0);
             table.SetColumnSpan(_chkEnabled, 3);
 
-            _numGainX = AddSliderRow(table, 1, "Sensibilité X", 0.1m, 3m, 0.05m);
-            _numGainY = AddSliderRow(table, 2, "Sensibilité Y", 0.1m, 3m, 0.05m);
-            _numSmooth = AddSliderRow(table, 3, "Lissage (0 = aucun, 0,95 = max)", 0m, 0.95m, 0.05m);
-            _numDeadX = AddSliderRow(table, 4, "Bande morte X (px)", 0m, 20m, 0.5m);
-            _numDeadY = AddSliderRow(table, 5, "Bande morte Y (px)", 0m, 20m, 0.5m);
-            _numTremor = AddSliderRow(table, 6, "Seuil de tremblement (px/s)", 0m, 200m, 5m);
+            _chkValid = new CheckBox
+            {
+                Text = "Utilisateur valide — aucun traitement, profil tremblant conservé",
+                AutoSize = true
+            };
+            table.Controls.Add(_chkValid, 0, 1);
+            table.SetColumnSpan(_chkValid, 3);
+
+            _numGainX = AddSliderRow(table, 2, "Sensibilité X", 0.1m, 3m, 0.05m);
+            _numGainY = AddSliderRow(table, 3, "Sensibilité Y", 0.1m, 3m, 0.05m);
+            _numSmooth = AddSliderRow(table, 4, "Lissage (0 = aucun, 0,95 = max)", 0m, 0.95m, 0.05m);
+            _numDeadX = AddSliderRow(table, 5, "Bande morte X (px)", 0m, 20m, 0.5m);
+            _numDeadY = AddSliderRow(table, 6, "Bande morte Y (px)", 0m, 20m, 0.5m);
+            _numTremor = AddSliderRow(table, 7, "Seuil de tremblement (px/s)", 0m, 200m, 5m);
 
             var buttons = new FlowLayoutPanel
             {
@@ -86,7 +94,7 @@ namespace MouseSmooth
 
             // Visualiseur temps réel : positions engagée/virtuelle et portes par axe,
             // rafraîchi à 20 Hz tant que la fenêtre est ouverte.
-            _visualizer = new FilterVisualizer(() => _engine.LastState, () => _engine.Enabled)
+            _visualizer = new FilterVisualizer(() => _engine.LastState, () => _engine.Enabled, () => _engine.PassThrough)
             {
                 Dock = DockStyle.Bottom
             };
@@ -171,7 +179,8 @@ namespace MouseSmooth
 
         private void BindLiveEvents()
         {
-            _chkEnabled.CheckedChanged += (s, e) => { _live.Enabled = _chkEnabled.Checked; Changed?.Invoke(_live); };
+            _chkEnabled.CheckedChanged += (s, e) => { _live.Enabled = _chkEnabled.Checked; UpdateEnabledState(); Changed?.Invoke(_live); };
+            _chkValid.CheckedChanged += (s, e) => { _live.ValidMode = _chkValid.Checked; UpdateEnabledState(); Changed?.Invoke(_live); };
             _numGainX.ValueChanged += (s, e) => { _live.GainX = (double)_numGainX.Value; Changed?.Invoke(_live); };
             _numGainY.ValueChanged += (s, e) => { _live.GainY = (double)_numGainY.Value; Changed?.Invoke(_live); };
             _numSmooth.ValueChanged += (s, e) => { _live.Smoothing = (double)_numSmooth.Value; Changed?.Invoke(_live); };
@@ -180,15 +189,29 @@ namespace MouseSmooth
             _numDeadY.ValueChanged += (s, e) => { _live.DeadbandY = (double)_numDeadY.Value; Changed?.Invoke(_live); };
         }
 
+        /// <summary>
+        /// Grise les réglages quand ils n'ont pas d'effet (lissage désactivé ou mode
+        /// utilisateur valide). Les valeurs restent stockées et retrouvent leur effet
+        /// dès la sortie du mode.
+        /// </summary>
+        private void UpdateEnabledState()
+        {
+            bool processing = _chkEnabled.Checked && !_chkValid.Checked;
+            _numGainX.Enabled = _numGainY.Enabled = _numSmooth.Enabled = processing;
+            _numDeadX.Enabled = _numDeadY.Enabled = _numTremor.Enabled = processing;
+        }
+
         private void LoadFromConfig(SmoothConfig cfg)
         {
             _chkEnabled.Checked = cfg.Enabled;
+            _chkValid.Checked = cfg.ValidMode;
             _numGainX.Value = (decimal)cfg.GainX;
             _numGainY.Value = (decimal)cfg.GainY;
             _numSmooth.Value = (decimal)cfg.Smoothing;
             _numTremor.Value = (decimal)cfg.TremorThreshold;
             _numDeadX.Value = (decimal)cfg.DeadbandX;
             _numDeadY.Value = (decimal)cfg.DeadbandY;
+            UpdateEnabledState();
         }
 
         /// <summary>Réaligne la case à cocher quand le toggle change ailleurs (menu/tray/Ctrl+Alt+M).</summary>
@@ -229,6 +252,7 @@ namespace MouseSmooth
         public static void CopyFrom(this SmoothConfig target, SmoothConfig source)
         {
             target.Enabled = source.Enabled;
+            target.ValidMode = source.ValidMode;
             target.GainX = source.GainX;
             target.GainY = source.GainY;
             target.Smoothing = source.Smoothing;

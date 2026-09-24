@@ -20,9 +20,10 @@ L'exécutable est dans `bin\Release\netcoreapp3.1\` (`MouseSmooth.exe`, avec
 
 Lancer `MouseSmooth.exe` : une icône apparaît dans le systray.
 
-- **Pastille verte** : lissage actif — **pastille rouge** : lissage désactivé.
-- **Menu contextuel** (clic droit) : case *Activé* (toggle), *Réglages…*,
-  *Calibrage…*, *Quitter*.
+- **Pastille verte** : lissage actif — **rouge** : désactivé — **bleue** : mode
+  utilisateur valide (souris native, hook conservé).
+- **Menu contextuel** (clic droit) : case *Activé* (toggle), case
+  *Utilisateur valide*, *Réglages…*, *Calibrage…*, *Quitter*.
 - **Double-clic** sur l'icône : ouvrir les réglages.
 - **Ctrl+Alt+M** : bascule actif/inactif depuis n'importe quelle application.
 
@@ -79,6 +80,16 @@ Vérifie, sans toucher au curseur réel : neutralisation d'un tremblement ±6 px
 suivi d'un geste lent (distance d'origine préservée), application des gains X/Y,
 seuil de tremblement (figeage sous le seuil, déblocage au-dessus), ré-ancrage
 sur saut externe et sur trou temporel.
+
+## Mode utilisateur valide
+
+Pour prêter la souris à un utilisateur sans tremblement sans désactiver le
+hook : menu systray → *Utilisateur valide* (ou case dans les réglages). Le
+hook `WH_MOUSE_LL` reste installé — la bascule est instantanée, le calibrage
+et le visualiseur continuent de fonctionner — mais chaque événement est rendu
+au système sans le moindre traitement : la souris se comporte exactement comme
+sans MouseSmooth. Le profil tremblant (seuil, lissage, sensibilité, bande
+morte) est conservé intact et revient dès la sortie du mode.
 
 ## Calibrage assisté
 
