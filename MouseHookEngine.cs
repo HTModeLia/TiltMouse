@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Runtime.InteropServices;
 
 namespace MouseSmooth
@@ -30,6 +31,30 @@ namespace MouseSmooth
         }
 
         public bool Enabled => _enabled;
+
+        private bool _calibrating;
+
+        /// <summary>Vrai pendant une session de calibrage (les bruts sont enregistrés).</summary>
+        public bool Calibrating => _calibrating;
+
+        /// <summary>
+        /// Positions brutes captées pendant le calibrage (events physiques uniquement,
+        /// thread UI). borné à 4000 échantillons.
+        /// </summary>
+        public readonly List<NativeMethods.POINT> CalibrationSamples = new List<NativeMethods.POINT>(1024);
+
+        /// <summary>Démarre une session de calibrage (vide le tampon).</summary>
+        public void StartCalibration()
+        {
+            CalibrationSamples.Clear();
+            _calibrating = true;
+        }
+
+        /// <summary>Termine la session de calibrage (les échantillons restent lisibles).</summary>
+        public void StopCalibration() => _calibrating = false;
+
+        /// <summary>Dernier état interne du filtre (copie, thread UI) : visualiseur.</summary>
+        public FilterState LastState => _state;
 
         public void Start()
         {
@@ -82,22 +107,27 @@ namespace MouseSmooth
             bool blocked = false;
             try
             {
-                // On ne traite que : hook actif, traitement utile, et uniquement les
-                // déplacements (WM_MOUSEMOVE). Les clics/molette sont laissés au système.
-                if (nCode >= 0 && _enabled && !_passThrough &&
-                    wParam == (IntPtr)NativeMethods.WM_MOUSEMOVE)
+                // Uniquement les déplacements (WM_MOUSEMOVE) : clics/molette laissés au système.
+                if (nCode >= 0 && wParam == (IntPtr)NativeMethods.WM_MOUSEMOVE)
                 {
                     // Lecture du MSLLHOOKSTRUCT via offsets : pt.x @0, pt.y @4,
                     // flags @12, time @16. Les flags trahissent les événements injectés
-                    // (auto-clickers, autres hooks) : on ne doit JAMAIS les filtrer,
-                    // sinon on bouclerait sur nos propres SetCursorPos.
+                    // (auto-clickers, autres hooks, nos propres SetCursorPos) : on ne
+                    // doit JAMAIS les filtrer, sinon on bouclerait à l'infini.
                     uint flags = (uint)Marshal.ReadInt32(lParam, 12);
                     if ((flags & (NativeMethods.LLMHF_INJECTED | NativeMethods.LLMHF_LOWER_IL_INJECTED)) == 0)
                     {
                         int x = Marshal.ReadInt32(lParam, 0);
                         int y = Marshal.ReadInt32(lParam, 4);
                         uint time = (uint)Marshal.ReadInt32(lParam, 16);
-                        blocked = ProcessMove(x, y, time);
+
+                        // Calibrage : enregistrement des bruts AVANT tout traitement,
+                        // indépendamment de l'état activé/désactivé du lissage.
+                        if (_calibrating && CalibrationSamples.Count < 4000)
+                            CalibrationSamples.Add(new NativeMethods.POINT { X = x, Y = y });
+
+                        if (_enabled && !_passThrough)
+                            blocked = ProcessMove(x, y, time);
                     }
                 }
             }

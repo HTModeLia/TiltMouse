@@ -40,6 +40,7 @@ namespace MouseSmooth
             menu.Items.Add("Activé", null, (s, e) => Toggle());
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add("Réglages…", null, (s, e) => ShowSettings());
+            menu.Items.Add("Calibrage…", null, (s, e) => ShowCalibration());
             menu.Items.Add("Quitter", null, (s, e) => Exit());
             _tray.ContextMenuStrip = menu;
 
@@ -70,6 +71,25 @@ namespace MouseSmooth
                 ((ToolStripMenuItem)_tray.ContextMenuStrip.Items[0]).Checked = _config.Enabled;
             SettingsStore.Save(_config);
             _settings?.SyncToggle(_config.Enabled);
+        }
+
+        /// <summary>
+        /// Assistant de calibrage : mesure le tremblement réel puis propose des
+        /// réglages. S'ils sont appliqués, ils prennent effet immédiatement.
+        /// </summary>
+        private void ShowCalibration()
+        {
+            using (var form = new CalibrationForm(_engine, _config))
+            {
+                form.Applied += cfg =>
+                {
+                    _config.CopyFrom(cfg);
+                    _engine.ApplyConfig(_config);
+                    SettingsStore.Save(_config);
+                    _settings?.Reload(_config);
+                };
+                form.ShowDialog();
+            }
         }
 
         /// <summary>Ouvre (ou ramène au premier plan) la fenêtre de réglages.</summary>

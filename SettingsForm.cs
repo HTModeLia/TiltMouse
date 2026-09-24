@@ -175,6 +175,15 @@ namespace MouseSmooth
                 _chkEnabled.Checked = enabled;
         }
 
+        /// <summary>Recharge l'affichage et l'état de référence après une modification externe (calibrage).</summary>
+        public void Reload(SmoothConfig cfg)
+        {
+            if (IsDisposed) return;
+            _saved.CopyFrom(cfg);
+            _live.CopyFrom(cfg);
+            LoadFromConfig(_live);
+        }
+
         protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
         {
             if (keyData == (Keys.Control | Keys.M))
