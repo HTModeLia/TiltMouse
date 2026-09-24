@@ -156,22 +156,18 @@ namespace MouseSmooth
                 return;
             }
 
-            // Position moyenne du tremblement, puis écart maximal autour de cette moyenne.
-            double meanX = 0, meanY = 0;
-            foreach (var p in samples) { meanX += p.X; meanY += p.Y; }
-            meanX /= samples.Count;
-            meanY /= samples.Count;
-
-            double maxDev = 0;
-            foreach (var p in samples)
-            {
-                double dev = Math.Max(Math.Abs(p.X - meanX), Math.Abs(p.Y - meanY));
-                if (dev > maxDev) maxDev = dev;
-            }
+            // DÉTREMPAGE : on retire la dérive linéaire de chaque axe (main qui glisse
+            // légèrement pendant la mesure) ; le tremblement est l'écart maximal des
+            // résidus autour de la droite de dérive. Sans cela, une simple dérive
+            // gonflerait le seuil jusqu'à rendre le curseur impossible à déplacer.
+            double maxDev = Math.Max(
+                ResidualMax(samples, p => p.X),
+                ResidualMax(samples, p => p.Y));
 
             // Seuil : 40 % au-dessus du tremblement mesuré (marge de sécurité),
-            // borné à la plage du réglage.
-            _recommended.TremorThreshold = Math.Min(200.0, Math.Max(10.0, 1.4 * maxDev));
+            // plafonné à 120 px : au-delà, un geste lent mettrait plus d'une seconde
+            // à partir et la soupape (2× le seuil) deviendrait trop permissive.
+            _recommended.TremorThreshold = Math.Min(120.0, Math.Max(10.0, 1.4 * maxDev));
 
             // Lissage : plus la main tremble, plus on filtre.
             _recommended.Smoothing = Math.Min(0.9, Math.Max(0.3, 0.3 + maxDev / 40.0));
@@ -189,6 +185,34 @@ namespace MouseSmooth
                 "Après application : la main posée ne doit plus bouger le curseur, et un\n" +
                 "geste volontaire doit débloquer le suivi immédiatement.",
                 "Réglages recommandés", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+
+        /// <summary>
+        /// Écart maximal des résidus d'un axe autour de sa droite de régression
+        /// (moindres carrés, t = index d'échantillon). Isole le tremblement de la
+        /// dérive lente de la main.
+        /// </summary>
+        private static double ResidualMax(System.Collections.Generic.List<NativeMethods.POINT> samples,
+                                          Func<NativeMethods.POINT, double> axis)
+        {
+            int n = samples.Count;
+            double sumT = 0, sumV = 0, sumTT = 0, sumTV = 0;
+            for (int i = 0; i < n; i++)
+            {
+                double t = i, v = axis(samples[i]);
+                sumT += t; sumV += v; sumTT += t * t; sumTV += t * v;
+            }
+            double denom = n * sumTT - sumT * sumT;
+            double slope = denom != 0 ? (n * sumTV - sumT * sumV) / denom : 0.0;
+            double intercept = (sumV - slope * sumT) / n;
+
+            double max = 0;
+            for (int i = 0; i < n; i++)
+            {
+                double resid = Math.Abs(axis(samples[i]) - (slope * i + intercept));
+                if (resid > max) max = resid;
+            }
+            return max;
         }
 
         protected override void OnFormClosed(FormClosedEventArgs e)

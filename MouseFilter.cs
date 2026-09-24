@@ -37,7 +37,9 @@ namespace MouseSmooth
     ///     le DÉPLACEMENT résiduel, pas la vitesse : un tremblement (oscillation sur place,
     ///     même rapide) maintient |V−C| sous le seuil => C reste strictement gelée et le
     ///     curseur ne bouge pas ; une dérive ou un geste fait croître l'écart sans retour
-    ///     => la porte s'ouvre et C rattrape V progressivement (aucun saut) ;
+    ///     => la porte s'ouvre et C rattrape V progressivement (aucun saut). La porte
+    ///     s'ouvre vite (60 ms) et se referme lentement (400 ms, mémoire de geste) ; une
+    ///     soupape force l'ouverture au-delà de 2× le seuil (aucun blocage possible) ;
     ///  3. au-delà du seuil, la cible mélange position engagée (filtrée) et position
     ///     virtuelle (native) selon la force de lissage. Le suivi est adaptatif : la main
     ///     rapide atteint exactement sa cible d'origine — le lissage n'introduit qu'un
@@ -53,7 +55,8 @@ namespace MouseSmooth
     {
         public const float SnapDistance = 250f;  // saut brut (px/événement) => resynchronisation
         public const float TauMs = 250f;         // constante de temps de la poursuite C -> V
-        public const float GateTauMs = 120f;     // lissage temporel de la porte (anti à-coups)
+        public const float GateOpenMs = 60f;     // ouverture de la porte (réactivité au geste)
+        public const float GateCloseMs = 400f;   // fermeture lente : mémoire de geste (anti à-coups)
         public const uint MaxGapMs = 1000;       // trou temporel => resynchronisation
 
         /// <summary>
@@ -92,14 +95,22 @@ namespace MouseSmooth
             float lambda = dt / (TauMs + dt);
 
             // 2. Seuil de tremblement, par axe : la porte s'ouvre quand l'écart V−C
-            //    (déplacement qui n'a pas été "validé") dépasse le seuil, et se referme
-            //    sous la moitié du seuil (hystérésis spatiale : pas de clignotement à la
-            //    frontière). Porte fermée => C gelée, curseur immobile. La porte est
-            //    ensuite lissée dans le temps pour que les transitions soient douces.
+            //    (déplacement non "validé") dépasse le seuil, et se referme sous la
+            //    moitié du seuil (hystérésis spatiale). Dynamique ASYMÉTRIQUE :
+            //    ouverture rapide (60 ms — le geste part immédiatement) mais fermeture
+            //    lente (400 ms — les micro-pauses d'un geste lent ne referment pas la
+            //    porte : c'est la "mémoire de geste"). Soupape anti-blocage : au-delà
+            //    de 2× le seuil d'écart, la porte s'ouvre en force — le curseur ne
+            //    peut jamais rester pris, quel que soit le réglage.
             float threshold = (float)Math.Max(0.0, cfg.TremorThreshold);
-            float gateLambda = dt / (GateTauMs + dt);
-            s.GateX += (GateValue(MathF.Abs(s.VX - s.CX), threshold) - s.GateX) * gateLambda;
-            s.GateY += (GateValue(MathF.Abs(s.VY - s.CY), threshold) - s.GateY) * gateLambda;
+            float gapX = MathF.Abs(s.VX - s.CX);
+            float gapY = MathF.Abs(s.VY - s.CY);
+            float gTargetX = gapX > 2f * threshold ? 1f : GateValue(gapX, threshold);
+            float gTargetY = gapY > 2f * threshold ? 1f : GateValue(gapY, threshold);
+            float kOpen = GateOpenMs / (GateOpenMs + dt);
+            float kClose = GateCloseMs / (GateCloseMs + dt);
+            s.GateX += (gTargetX - s.GateX) * (gTargetX > s.GateX ? kOpen : kClose);
+            s.GateY += (gTargetY - s.GateY) * (gTargetY > s.GateY ? kOpen : kClose);
 
             // Poursuite filtrée : C ne rattrape V qu'à hauteur de l'ouverture de la porte.
             // (gelée quand la porte est fermée, rattrapage progressif puis suivi sinon).

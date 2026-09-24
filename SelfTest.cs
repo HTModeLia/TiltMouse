@@ -144,6 +144,23 @@ namespace MouseSmooth
                 Check($"Trou temporel ré-ancré (tx={tx})", tx == 560);
             }
 
+            // 7. Soupape anti-blocage : même avec un seuil très haut, une dérive
+            //    soutenue finit par ouvrir le suivi en force (à 2× le seuil d'écart).
+            {
+                var cfg = new SmoothConfig { Smoothing = 0.8, DeadbandX = 3, DeadbandY = 3, GainX = 1, GainY = 1, TremorThreshold = 100 };
+                var s = FilterState.Anchored(500, 500, 0);
+                uint t = 0;
+                int reached = 500;
+                for (int i = 0; i < 1250; i++) // 10 s à 125 Hz, dérive 60 px/s
+                {
+                    t += 8;
+                    if (MouseFilter.Step(ref s, cfg, 500 + i * 3 / 5, 500, t, out int tx, out _))
+                        reached = Math.Max(reached, tx);
+                }
+                Check($"Soupape anti-blocage : dérive soutenue finit par passer (avance {reached - 500} px >= 150)",
+                      reached - 500 >= 150);
+            }
+
             Console.WriteLine(_failures == 0 ? "SELFTEST OK" : "SELFTEST FAILED");
             return _failures == 0 ? 0 : 1;
         }

@@ -16,7 +16,7 @@ namespace MouseSmooth
 
         private CheckBox _chkEnabled, _chkValid;
         private NumericUpDown _numGainX, _numGainY, _numSmooth, _numTremor, _numDeadX, _numDeadY;
-        private FilterVisualizer _visualizer;
+        private FilterCrossPanel _visualizer;
         private Button _btnOk, _btnCancel, _btnDefaults;
 
         /// <summary>Déclenché (thread UI) à chaque application de la configuration.</summary>
@@ -92,9 +92,13 @@ namespace MouseSmooth
             Controls.Add(table);
             Controls.Add(buttons);
 
-            // Visualiseur temps réel : positions engagée/virtuelle et portes par axe,
-            // rafraîchi à 20 Hz tant que la fenêtre est ouverte.
-            _visualizer = new FilterVisualizer(() => _engine.LastState, () => _engine.Enabled, () => _engine.PassThrough)
+            // Visualiseur en croix : positions engagée/virtuelle par axe, zone de
+            // gel (seuil), portes et valeurs numériques — rafraîchi à 20 Hz.
+            _visualizer = new FilterCrossPanel(
+                () => _engine.LastState,
+                () => _engine.CurrentConfig,
+                () => _engine.Enabled,
+                () => _engine.PassThrough)
             {
                 Dock = DockStyle.Bottom
             };

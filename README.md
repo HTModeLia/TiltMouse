@@ -34,7 +34,7 @@ Lancer `MouseSmooth.exe` : une icône apparaît dans le systray.
 | Sensibilité X | gain appliqué aux deltas horizontaux (2.0 = distance doublée) | 0.1 – 3.0 |
 | Sensibilité Y | gain appliqué aux deltas verticaux | 0.1 – 3.0 |
 | Lissage | force du filtrage (0 = natif, 0.95 = très filtré) | 0 – 0.95 |
-| Seuil de tremblement | écart de déplacement au-delà duquel le suivi reprend (en dessous : curseur figé) | 0 (désactivé) – 200 |
+| Seuil de tremblement | écart au-delà duquel le suivi reprend (en dessous : curseur figé) | 0 (désactivé) – 120 |
 | Bande morte X/Y | micro-déplacements résiduels ignorés (px) | 0 – 20 |
 
 Les réglages s'appliquent en temps réel et sont persistés dans
@@ -51,9 +51,11 @@ Les réglages s'appliquent en temps réel et sont persistés dans
    quand l'écart V−C dépasse le seuil de tremblement** (porte avec hystérésis
    spatiale et lissage temporel 120 ms). Le discriminant est le déplacement
    résiduel, pas la vitesse : un tremblement (la main oscille sur place) garde
-   l'écart sous le seuil =&gt; C reste gelée et le curseur aussi ; un geste fait
-   croître l'écart sans retour =&gt; la porte s'ouvre et C rattrape V
-   progressivement, sans saut ;
+   l'écart sous le seuil =&gt; C reste gelée et le curseur aussi ;un geste fait croître l'écart sans retour =&gt; la porte s'ouvre et C rattrape V
+progressivement, sans saut. La porte s'ouvre vite (60 ms) et se referme
+lentement (400 ms — mémoire de geste, les micro-pauses d'un geste lent ne
+replantent pas le filtre) ; une soupape force l'ouverture à 2× le seuil :
+un blocage durable du curseur est impossible, quel que soit le réglage ;
 3. **Vitesse d'origine préservée** : le mélange filtré/natif est adaptatif à la
    vitesse — lent = très filtré (la main tremble surtout à l'arrêt), rapide =
    quasiment natif. Le gain pointeur, le DPI et l'accélération Windows restent
@@ -91,31 +93,43 @@ au système sans le moindre traitement : la souris se comporte exactement comme
 sans MouseSmooth. Le profil tremblant (seuil, lissage, sensibilité, bande
 morte) est conservé intact et revient dès la sortie du mode.
 
+Dans ce mode, le filtre continue de tourner en **simulation** sur les
+mouvements réels (sans jamais toucher au curseur) : le visualiseur en croix
+montre ce que ferait le lissage — pratique pour régler le seuil ou comparer
+les réglages avec une main valide.
+
 ## Calibrage assisté
 
 Menu systray → *Calibrage…* : posez la main sur la souris sans intention de
 mouvement ; après 3 s de préparation, le tremblement réel est mesuré pendant
 5 s sur les événements **bruts** du hook (avant tout lissage) : la mesure
-reflète le matériel, pas le comportement filtré. L'assistant en déduit un
-seuil (40 % au-dessus du tremblement mesuré), un lissage et une bande morte,
-applicables en un clic — ils prennent effet immédiatement et sont persistés.
+reflète le matériel, pas le comportement filtré. La dérive lente de la main
+est **détendrée** (régression linéaire par axe) : une main qui glisse
+légèrement pendant la mesure ne gonfle plus le seuil. L'assistant en déduit
+un seuil (40 % au-dessus du tremblement mesuré, plafonné à 120 px), un
+lissage et une bande morte, applicables en un clic — ils prennent effet
+immédiatement et sont persistés.
 
 Recommandation : ne bougez pas volontairement pendant la mesure (le résultat
 serait surestimé) ; recommencez si besoin.
 
-## Visualiseur du filtre
+## Visualiseur en croix
 
-La fenêtre de réglages affiche en temps réel, pour chaque axe :
+La fenêtre de réglages affiche une croix (axe X horizontal, axe Y vertical) :
 
 - le **disque gris** : position *engagée* C (ce que le filtre a validé) ;
 - le **triangle** : position *virtuelle* V (consigne matérielle) — orange
   quand la porte est fermée (tremblement absorbé), vert en suivi natif ;
-- la **jauge** : ouverture de la porte (0 = gelé, 100 % = suivi natif).
+- le **cercle bleu pointillé** : seuil de tremblement autour de C — V dedans
+  =&gt; gelé, V dehors =&gt; le suivi reprend ;
+- la colonne de droite : valeurs par axe (positions C/V, écart, ouverture de
+  porte) et rappel du seuil et de la soupape.
 
-Utilisation typique : main posée, le triangle reste orange et le curseur est
-immobile ; lors d'un geste, il passe vert et le disque le rattrape. Si un
-geste lent reste bloqué, baissez le seuil ; si la main posée fait glisser le
-curseur, augmentez-le.
+Utilisation typique : main posée, le triangle reste orange dans le cercle et
+le curseur est immobile ; lors d'un geste, il passe vert et sort du cercle,
+le disque le rattrape. Si un geste lent part difficilement, baissez le seuil ;
+si la main posée fait glisser le curseur, augmentez-le. La soupape (ouverture
+forcée à 2× le seuil) garantit qu'un geste soutenu finit toujours par passer.
 
 ## Réglage conseillé
 

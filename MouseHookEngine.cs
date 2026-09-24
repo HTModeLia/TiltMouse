@@ -59,6 +59,9 @@ namespace MouseSmooth
         /// <summary>Dernier état interne du filtre (copie, thread UI) : visualiseur.</summary>
         public FilterState LastState => _state;
 
+        /// <summary>Configuration courante (copie, thread UI) : visualiseur.</summary>
+        public SmoothConfig CurrentConfig => _config;
+
         public void Start()
         {
             if (_hook != IntPtr.Zero) return;
@@ -138,7 +141,12 @@ namespace MouseSmooth
                         if (_calibrating && CalibrationSamples.Count < 4000)
                             CalibrationSamples.Add(new NativeMethods.POINT { X = x, Y = y });
 
-                        if (_enabled && !_passThrough)
+                        // Mode observation (utilisateur valide) : la souris reste native,
+                        // mais le filtre tourne en SIMULATION pour alimenter le
+                        // visualiseur — l'utilisateur voit ce que ferait le lissage.
+                        if (_passThrough && _config.ValidMode)
+                            ObserveMove(x, y, time);
+                        else if (_enabled && !_passThrough)
                             blocked = ProcessMove(x, y, time);
                     }
                 }
@@ -171,6 +179,23 @@ namespace MouseSmooth
             if (!MouseFilter.Step(ref _state, _config, px, py, time, out int tx, out int ty))
                 return true; // événement consommé, mais pas de déplacement à appliquer
 
+            return ApplyTarget(tx, ty);
+        }
+
+        /// <summary>
+        /// Mode observation : alimente le filtre en simulation, sans jamais toucher
+        /// au curseur. Le visualiseur montre en temps réel ce que ferait le lissage
+        /// sur les mouvements réels — utile pour régler le seuil avec une main valide.
+        /// </summary>
+        private void ObserveMove(int px, int py, uint time)
+        {
+            if (!_state.HasPosition)
+                _state = FilterState.Anchored(px, py, time);
+            MouseFilter.Step(ref _state, _config, px, py, time, out _, out _);
+        }
+
+        private bool ApplyTarget(int tx, int ty)
+        {
             if (NativeMethods.SetCursorPos(tx, ty))
             {
                 _setCursorFailures = 0;
