@@ -57,6 +57,7 @@ namespace MouseSmooth
             _engine.Start();
         }
 
+        /// <summary>Bascule lissage actif/inactif (menu, double-clic icône, Ctrl+Alt+M).</summary>
         private void Toggle()
         {
             _config.Enabled = !_config.Enabled;
@@ -71,6 +72,7 @@ namespace MouseSmooth
             _settings?.SyncToggle(_config.Enabled);
         }
 
+        /// <summary>Ouvre (ou ramène au premier plan) la fenêtre de réglages.</summary>
         private void ShowSettings()
         {
             if (_settings == null || _settings.IsDisposed)
@@ -92,6 +94,7 @@ namespace MouseSmooth
             _settings.Activate();
         }
 
+        /// <summary>Désactivation de secours déclenchée par le moteur (curseur non repositionnable).</summary>
         private void OnEngineAutoDisabled()
         {
             _config.Enabled = false;

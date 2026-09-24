@@ -18,6 +18,13 @@ namespace MouseSmooth
         /// <summary>Force du lissage : 0 = natif, 0.95 = maximal.</summary>
         public double Smoothing { get; set; } = 0.6;
 
+        /// <summary>
+        /// Seuil de tremblement en pixels : en dessous de cette vitesse d'écriture
+        /// (px/s sur le suivi lent), le mouvement est assimilé à du tremblement et le
+        /// curseur reste immobile ; au-dessus, le lissage s'applique normalement.
+        /// </summary>
+        public double TremorThreshold { get; set; } = 30.0;
+
         /// <summary>Bande morte X en pixels (micro-déplacements ignorés).</summary>
         public double DeadbandX { get; set; } = 2.0;
 
@@ -29,6 +36,7 @@ namespace MouseSmooth
             GainX = Math.Min(3.0, Math.Max(0.1, GainX));
             GainY = Math.Min(3.0, Math.Max(0.1, GainY));
             Smoothing = Math.Min(0.95, Math.Max(0.0, Smoothing));
+            TremorThreshold = Math.Min(200.0, Math.Max(0.0, TremorThreshold));
             DeadbandX = Math.Min(20.0, Math.Max(0.0, DeadbandX));
             DeadbandY = Math.Min(20.0, Math.Max(0.0, DeadbandY));
         }
@@ -40,6 +48,7 @@ namespace MouseSmooth
             GainX = d.GainX;
             GainY = d.GainY;
             Smoothing = d.Smoothing;
+            TremorThreshold = d.TremorThreshold;
             DeadbandX = d.DeadbandX;
             DeadbandY = d.DeadbandY;
         }

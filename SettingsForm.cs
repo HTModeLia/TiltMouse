@@ -3,14 +3,18 @@ using System.Windows.Forms;
 
 namespace MouseSmooth
 {
-    /// <summary>Fenêtre de réglages : sensibilité X/Y, lissage, bande morte, toggle.</summary>
+    /// <summary>
+    /// Fenêtre de réglages : sensibilité X/Y, lissage, seuil de tremblement,
+    /// bande morte, toggle. Les modifications s'appliquent en temps réel ;
+    /// Annuler/fermeture restaure le dernier état enregistré.
+    /// </summary>
     internal sealed class SettingsForm : Form
     {
         private readonly SmoothConfig _live;          // appliquée en temps réel
         private readonly SmoothConfig _saved;         // dernier état enregistré
 
         private CheckBox _chkEnabled;
-        private NumericUpDown _numGainX, _numGainY, _numSmooth, _numDeadX, _numDeadY;
+        private NumericUpDown _numGainX, _numGainY, _numSmooth, _numTremor, _numDeadX, _numDeadY;
         private Button _btnOk, _btnCancel, _btnDefaults;
 
         /// <summary>Déclenché (thread UI) à chaque application de la configuration.</summary>
@@ -29,14 +33,18 @@ namespace MouseSmooth
             ShowInTaskbar = false;
             Font = new System.Drawing.Font("Segoe UI", 9f);
             AutoScaleMode = AutoScaleMode.Dpi;
-            ClientSize = new System.Drawing.Size(460, 250);
+            // Hauteur pilotée par le contenu (AutoSize) : aucun réglage ne peut être
+            // masqué par les boutons, quelle que soit la police ou l'échelle DPI.
+            AutoSize = true;
+            AutoSizeMode = AutoSizeMode.GrowOnly;
+            MinimumSize = new System.Drawing.Size(460, 0);
 
             var table = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
                 Padding = new Padding(12),
                 ColumnCount = 3,
-                RowCount = 6,
+                RowCount = 7,
                 AutoSize = true
             };
             table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 55));
@@ -52,6 +60,7 @@ namespace MouseSmooth
             _numSmooth = AddSliderRow(table, 3, "Lissage (0 = aucun, 0,95 = max)", 0m, 0.95m, 0.05m);
             _numDeadX = AddSliderRow(table, 4, "Bande morte X (px)", 0m, 20m, 0.5m);
             _numDeadY = AddSliderRow(table, 5, "Bande morte Y (px)", 0m, 20m, 0.5m);
+            _numTremor = AddSliderRow(table, 6, "Seuil de tremblement (px/s)", 0m, 200m, 5m);
 
             var buttons = new FlowLayoutPanel
             {
@@ -143,6 +152,7 @@ namespace MouseSmooth
             _numGainX.ValueChanged += (s, e) => { _live.GainX = (double)_numGainX.Value; Changed?.Invoke(_live); };
             _numGainY.ValueChanged += (s, e) => { _live.GainY = (double)_numGainY.Value; Changed?.Invoke(_live); };
             _numSmooth.ValueChanged += (s, e) => { _live.Smoothing = (double)_numSmooth.Value; Changed?.Invoke(_live); };
+            _numTremor.ValueChanged += (s, e) => { _live.TremorThreshold = (double)_numTremor.Value; Changed?.Invoke(_live); };
             _numDeadX.ValueChanged += (s, e) => { _live.DeadbandX = (double)_numDeadX.Value; Changed?.Invoke(_live); };
             _numDeadY.ValueChanged += (s, e) => { _live.DeadbandY = (double)_numDeadY.Value; Changed?.Invoke(_live); };
         }
@@ -153,6 +163,7 @@ namespace MouseSmooth
             _numGainX.Value = (decimal)cfg.GainX;
             _numGainY.Value = (decimal)cfg.GainY;
             _numSmooth.Value = (decimal)cfg.Smoothing;
+            _numTremor.Value = (decimal)cfg.TremorThreshold;
             _numDeadX.Value = (decimal)cfg.DeadbandX;
             _numDeadY.Value = (decimal)cfg.DeadbandY;
         }
@@ -170,7 +181,9 @@ namespace MouseSmooth
             {
                 MessageBox.Show(this,
                     "Ctrl+Alt+M bascule le lissage depuis n'importe quelle application.\n" +
-                    "Double-clic sur l'icône systray : ouvrir les réglages.",
+                    "Double-clic sur l'icône systray : ouvrir les réglages.\n\n" +
+                    "Seuil de tremblement : en dessous de cette vitesse (px/s), le curseur\n" +
+                    "reste immobile — au-dessus, le pointage reprend avec la vitesse native.",
                     "Raccourci", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return true;
             }
@@ -187,6 +200,7 @@ namespace MouseSmooth
             target.GainX = source.GainX;
             target.GainY = source.GainY;
             target.Smoothing = source.Smoothing;
+            target.TremorThreshold = source.TremorThreshold;
             target.DeadbandX = source.DeadbandX;
             target.DeadbandY = source.DeadbandY;
         }
