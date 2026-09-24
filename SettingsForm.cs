@@ -12,18 +12,21 @@ namespace MouseSmooth
     {
         private readonly SmoothConfig _live;          // appliquée en temps réel
         private readonly SmoothConfig _saved;         // dernier état enregistré
+        private readonly MouseHookEngine _engine;     // source d'état du visualiseur
 
         private CheckBox _chkEnabled;
         private NumericUpDown _numGainX, _numGainY, _numSmooth, _numTremor, _numDeadX, _numDeadY;
+        private FilterVisualizer _visualizer;
         private Button _btnOk, _btnCancel, _btnDefaults;
 
         /// <summary>Déclenché (thread UI) à chaque application de la configuration.</summary>
         public event Action<SmoothConfig> Changed;
 
-        public SettingsForm(SmoothConfig current)
+        public SettingsForm(SmoothConfig current, MouseHookEngine engine)
         {
             _live = current.Clone();
             _saved = current.Clone();
+            _engine = engine;
 
             Text = "MouseSmooth — Réglages";
             FormBorderStyle = FormBorderStyle.FixedDialog;
@@ -76,8 +79,28 @@ namespace MouseSmooth
             buttons.Controls.Add(_btnCancel);
             buttons.Controls.Add(_btnDefaults);
 
+            // Ordre d'ajout = ordre d'ancrage inversé : boutons en bas, visualiseur
+            // juste au-dessus, tableau remplit le reste.
             Controls.Add(table);
             Controls.Add(buttons);
+
+            // Visualiseur temps réel : positions engagée/virtuelle et portes par axe,
+            // rafraîchi à 20 Hz tant que la fenêtre est ouverte.
+            _visualizer = new FilterVisualizer(() => _engine.LastState, () => _engine.Enabled)
+            {
+                Dock = DockStyle.Bottom
+            };
+            Controls.Add(_visualizer);
+
+            var uiTimer = new Timer { Interval = 50 };
+            uiTimer.Tick += (s, e) =>
+            {
+                if (IsDisposed) { uiTimer.Stop(); return; } // fenêtre fermée : arrêt propre
+                _visualizer.Invalidate();
+            };
+            uiTimer.Start();
+            FormClosed += (s, e) => uiTimer.Stop();
+
             AcceptButton = _btnOk;
             CancelButton = _btnCancel;
 

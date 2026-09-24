@@ -97,7 +97,7 @@ namespace MouseSmooth
         {
             if (_settings == null || _settings.IsDisposed)
             {
-                _settings = new SettingsForm(_config);
+                _settings = new SettingsForm(_config, _engine);
                 _settings.Changed += cfg =>
                 {
                     _engine.ApplyConfig(cfg);
