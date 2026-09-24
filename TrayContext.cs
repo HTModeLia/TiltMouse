@@ -16,6 +16,8 @@ namespace MouseSmooth
         private readonly NotifyIcon _tray;
         private SettingsForm _settings;
         private ToolStripMenuItem _miValidMode;
+        private Icon _currentIcon;   // icône affichée (détenue par nous, jamais via _tray.Icon)
+        private bool _exiting;       // garde : aucun callback visuel pendant la fermeture
 
         public TrayContext()
         {
@@ -28,13 +30,12 @@ namespace MouseSmooth
             _window.HotkeyPressed += Toggle;
             _window.Show(); // garde le handle vivant pour le raccourci global (fenêtre hors écran)
 
-            Icon icon = MakeIcon(_config.Enabled, _config.ValidMode);
             _tray = new NotifyIcon
             {
-                Icon = icon,
                 Text = TrayText(),
                 Visible = true
             };
+            SwapIcon(MakeIcon(_config.Enabled, _config.ValidMode));
             _tray.DoubleClick += (s, e) => ShowSettings();
 
             var menu = new ContextMenuStrip();
@@ -77,12 +78,29 @@ namespace MouseSmooth
             : _config.Enabled ? "MouseSmooth — actif"
             : "MouseSmooth — désactivé";
 
+        /// <summary>
+        /// Remplace l'icône du tray en libérant proprement l'ancienne. L'icône
+        /// courante est suivie dans un champ : on ne lit jamais _tray.Icon, qui peut
+        /// être momentanément incohérent (source d'exceptions à la fermeture).
+        /// </summary>
+        private void SwapIcon(Icon newIcon)
+        {
+            Icon old = _currentIcon;
+            _currentIcon = newIcon;
+            _tray.Icon = newIcon;
+            if (old != null)
+            {
+                try { NativeMethods.DestroyIcon(old.Handle); }
+                catch { /* handle déjà invalide : rien à faire */ }
+                old.Dispose();
+            }
+        }
+
         /// <summary>Met à jour icône, info-bulle et coches du menu selon la config.</summary>
         private void RefreshVisuals()
         {
-            Icon oldIcon = _tray.Icon;
-            _tray.Icon = MakeIcon(_config.Enabled, _config.ValidMode);
-            if (oldIcon != null) { NativeMethods.DestroyIcon(oldIcon.Handle); oldIcon.Dispose(); }
+            if (_exiting) return; // fermeture en cours : ne plus toucher au tray
+            SwapIcon(MakeIcon(_config.Enabled, _config.ValidMode));
             _tray.Text = TrayText();
             if (_tray.ContextMenuStrip != null)
             {
@@ -146,6 +164,7 @@ namespace MouseSmooth
         /// <summary>Désactivation de secours déclenchée par le moteur (curseur non repositionnable).</summary>
         private void OnEngineAutoDisabled()
         {
+            if (_exiting) return;
             _config.Enabled = false;
             RefreshVisuals();
             SettingsStore.Save(_config);
@@ -154,15 +173,32 @@ namespace MouseSmooth
                 "bureau sécurisé…). Le lissage est désactivé.", ToolTipIcon.Warning);
         }
 
+        /// <summary>
+        /// Fermeture ordonnée et idempotente : d'abord retirer l'icône du tray (plus
+        /// aucune interaction NIM possible), puis le hook, le raccourci, les fenêtres,
+        /// et enfin l'icône détenue. Chaque étape est tolérante aux pannes.
+        /// </summary>
         private void Exit()
         {
-            Icon current = _tray.Icon;
-            if (current != null) { NativeMethods.DestroyIcon(current.Handle); current.Dispose(); }
-            _engine.Dispose();
-            _window.UnregisterHotkeySafe();
-            _tray.Visible = false;
-            _tray.Dispose();
-            _settings?.Close();
+            if (_exiting) return;
+            _exiting = true;
+
+            try { _tray.Visible = false; } catch { }
+            try { _engine.Dispose(); } catch { }
+            try { _window.UnregisterHotkeySafe(); } catch { }
+            try { _settings?.Close(); } catch { }
+            try { _tray.Dispose(); } catch { }
+            try
+            {
+                if (_currentIcon != null)
+                {
+                    NativeMethods.DestroyIcon(_currentIcon.Handle);
+                    _currentIcon.Dispose();
+                    _currentIcon = null;
+                }
+            }
+            catch { }
+
             Application.Exit();
         }
 
@@ -195,12 +231,24 @@ namespace MouseSmooth
 
         protected override void Dispose(bool disposing)
         {
-            if (disposing)
+            if (disposing && !_exiting)
             {
-                _engine.Dispose();
-                _window.UnregisterHotkeySafe();
-                _tray.Visible = false;
-                _tray.Dispose();
+                // Chemin de secours (disposition sans passage par Quitter) : le même
+                // démontage, protégé ; si Exit() a déjà tourné, rien à refaire.
+                try { _tray.Visible = false; } catch { }
+                try { _engine.Dispose(); } catch { }
+                try { _window.UnregisterHotkeySafe(); } catch { }
+                try { _tray.Dispose(); } catch { }
+                try
+                {
+                    if (_currentIcon != null)
+                    {
+                        NativeMethods.DestroyIcon(_currentIcon.Handle);
+                        _currentIcon.Dispose();
+                        _currentIcon = null;
+                    }
+                }
+                catch { }
             }
             base.Dispose(disposing);
         }
