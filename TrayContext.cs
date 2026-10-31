@@ -5,52 +5,49 @@ using System.Windows.Forms;
 namespace MouseSmooth
 {
     /// <summary>
-    /// Contexte applicatif : icône systray, menu (toggle, réglages, quitter),
-    /// raccourci global Ctrl+Alt+M, moteur de hook.
+    /// Contexte applicatif : icône systray, menu (toggle, réglages, calibrage,
+    /// quitter), raccourci global Ctrl+Alt+M, moteur de lissage.
     /// </summary>
-    internal sealed class TrayContext : ApplicationContext, IDisposable
+    internal sealed class TrayContext : ApplicationContext
     {
         private readonly SmoothConfig _config;
-        private readonly MouseHookEngine _engine;
+        private readonly MotionEngine _engine;
         private readonly HiddenWindow _window;
         private readonly NotifyIcon _tray;
+        private readonly ToolStripMenuItem _miEnabled;
         private SettingsForm _settings;
-        private ToolStripMenuItem _miValidMode;
-        private Icon _currentIcon;   // icône affichée (détenue par nous, jamais via _tray.Icon)
+        private Icon _currentIcon;   // icône affichée (détenue par nous, jamais lue via _tray.Icon)
         private bool _exiting;       // garde : aucun callback visuel pendant la fermeture
 
         public TrayContext()
         {
             _config = SettingsStore.Load();
-            _engine = new MouseHookEngine(_config);
-            _engine.ApplyConfig(_config);
-            _engine.AutoDisabled = OnEngineAutoDisabled;
 
             _window = new HiddenWindow();
             _window.HotkeyPressed += Toggle;
-            _window.Show(); // garde le handle vivant pour le raccourci global (fenêtre hors écran)
+            _window.Show(); // garde le handle vivant (raccourci global, marshaling vers l'UI)
 
-            _tray = new NotifyIcon
+            _engine = new MotionEngine(_config);
+            _engine.AutoDisabled += () =>
             {
-                Text = TrayText(),
-                Visible = true
+                // Déclenché sur le thread moteur : retour au thread UI.
+                try { _window.BeginInvoke((Action)OnEngineAutoDisabled); } catch { }
             };
-            SwapIcon(MakeIcon(_config.Enabled, _config.ValidMode));
+
+            _tray = new NotifyIcon { Text = TrayText(), Visible = true };
+            SwapIcon(MakeIcon(_config.Enabled));
             _tray.DoubleClick += (s, e) => ShowSettings();
 
             var menu = new ContextMenuStrip();
-            menu.Items.Add("Activé", null, (s, e) => Toggle());
-            _miValidMode = new ToolStripMenuItem("Utilisateur valide") { Checked = _config.ValidMode };
-            _miValidMode.Click += (s, e) => SetValidMode(!_config.ValidMode);
-            menu.Items.Add(_miValidMode);
+            _miEnabled = new ToolStripMenuItem("Lissage activé  (Ctrl+Alt+M)") { Checked = _config.Enabled };
+            _miEnabled.Click += (s, e) => Toggle();
+            menu.Items.Add(_miEnabled);
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add("Réglages…", null, (s, e) => ShowSettings());
             menu.Items.Add("Calibrage…", null, (s, e) => ShowCalibration());
+            menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add("Quitter", null, (s, e) => Exit());
             _tray.ContextMenuStrip = menu;
-
-            // Item "Activé" coché selon l'état.
-            ((ToolStripMenuItem)menu.Items[0]).Checked = _config.Enabled;
 
             if (!_window.RegisterToggleHotkey())
             {
@@ -59,30 +56,28 @@ namespace MouseSmooth
                     "MouseSmooth", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             }
 
-            if (_config.Enabled) _engine.SetEnabled(true);
-            _engine.Start();
+            if (!_engine.Start())
+            {
+                MessageBox.Show("Impossible d'installer le hook souris : le lissage ne fonctionnera pas.",
+                    "MouseSmooth", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
         }
 
-        /// <summary>Bascule lissage actif/inactif (menu, double-clic icône, Ctrl+Alt+M).</summary>
-        private void Toggle()
+        /// <summary>Bascule lissage actif/inactif (menu, Ctrl+Alt+M, réglages).</summary>
+        private void Toggle() => SetEnabled(!_config.Enabled);
+
+        private void SetEnabled(bool on)
         {
-            _config.Enabled = !_config.Enabled;
-            _engine.SetEnabled(_config.Enabled);
+            _config.Enabled = on;
+            _engine.SetEnabled(on);
             RefreshVisuals();
             SettingsStore.Save(_config);
         }
 
-        /// <summary>Texte d'info-bulle selon l'état (utilisateur valide / actif / désactivé).</summary>
         private string TrayText() =>
-            _config.ValidMode ? "MouseSmooth — utilisateur valide (natif)"
-            : _config.Enabled ? "MouseSmooth — actif"
-            : "MouseSmooth — désactivé";
+            _config.Enabled ? "MouseSmooth — lissage actif" : "MouseSmooth — souris native";
 
-        /// <summary>
-        /// Remplace l'icône du tray en libérant proprement l'ancienne. L'icône
-        /// courante est suivie dans un champ : on ne lit jamais _tray.Icon, qui peut
-        /// être momentanément incohérent (source d'exceptions à la fermeture).
-        /// </summary>
+        /// <summary>Remplace l'icône du tray en libérant proprement l'ancienne.</summary>
         private void SwapIcon(Icon newIcon)
         {
             Icon old = _currentIcon;
@@ -96,46 +91,33 @@ namespace MouseSmooth
             }
         }
 
-        /// <summary>Met à jour icône, info-bulle et coches du menu selon la config.</summary>
+        /// <summary>Met à jour icône, info-bulle, menu et fenêtre de réglages selon la config.</summary>
         private void RefreshVisuals()
         {
-            if (_exiting) return; // fermeture en cours : ne plus toucher au tray
-            SwapIcon(MakeIcon(_config.Enabled, _config.ValidMode));
+            if (_exiting) return;
+            SwapIcon(MakeIcon(_config.Enabled));
             _tray.Text = TrayText();
-            if (_tray.ContextMenuStrip != null)
-            {
-                ((ToolStripMenuItem)_tray.ContextMenuStrip.Items[0]).Checked = _config.Enabled;
-                ((ToolStripMenuItem)_tray.ContextMenuStrip.Items[1]).Checked = _config.ValidMode;
-            }
-            _settings?.SyncToggle(_config.Enabled);
+            _miEnabled.Checked = _config.Enabled;
+            _settings?.SyncEnabled(_config.Enabled);
         }
 
-        /// <summary>
-        /// Mode utilisateur valide : le hook RESTE installé mais ne traite plus rien
-        /// (pass-through natif) ; le profil tremblant est conservé intact et revient
-        /// dès la sortie du mode. Bascule instantanée, sans réinstallation.
-        /// </summary>
-        private void SetValidMode(bool on)
+        /// <summary>Applique une configuration venant des réglages ou du calibrage.</summary>
+        private void Apply(SmoothConfig cfg)
         {
-            _config.ValidMode = on;
+            bool toggled = cfg.Enabled != _config.Enabled;
+            _config.CopyFrom(cfg);
             _engine.ApplyConfig(_config);
-            SettingsStore.Save(_config);
+            if (toggled) _engine.SetEnabled(_config.Enabled);
             RefreshVisuals();
-            _settings?.Reload(_config);
         }
 
-        /// <summary>
-        /// Assistant de calibrage : mesure le tremblement réel puis propose des
-        /// réglages. S'ils sont appliqués, ils prennent effet immédiatement.
-        /// </summary>
         private void ShowCalibration()
         {
             using (var form = new CalibrationForm(_engine, _config))
             {
                 form.Applied += cfg =>
                 {
-                    _config.CopyFrom(cfg);
-                    _engine.ApplyConfig(_config);
+                    Apply(cfg);
                     SettingsStore.Save(_config);
                     _settings?.Reload(_config);
                 };
@@ -149,13 +131,8 @@ namespace MouseSmooth
             if (_settings == null || _settings.IsDisposed)
             {
                 _settings = new SettingsForm(_config, _engine);
-                _settings.Changed += cfg =>
-                {
-                    _config.CopyFrom(cfg); // répercute les valeurs du formulaire
-                    _engine.ApplyConfig(cfg);
-                    _engine.SetEnabled(cfg.Enabled);
-                    RefreshVisuals();
-                };
+                _settings.Changed += Apply;
+                _settings.CalibrateRequested += ShowCalibration;
             }
             _settings.Show();
             _settings.Activate();
@@ -169,20 +146,24 @@ namespace MouseSmooth
             RefreshVisuals();
             SettingsStore.Save(_config);
             _tray.ShowBalloonTip(4000, "MouseSmooth désactivé",
-                "Le repositionnement du curseur a échoué de façon répétée (session verrouillée, " +
-                "bureau sécurisé…). Le lissage est désactivé.", ToolTipIcon.Warning);
+                "Le curseur n'a pas pu être repositionné de façon répétée (session verrouillée, " +
+                "bureau sécurisé…). Réactivez le lissage avec Ctrl+Alt+M.", ToolTipIcon.Warning);
         }
 
         /// <summary>
-        /// Fermeture ordonnée et idempotente : d'abord retirer l'icône du tray (plus
-        /// aucune interaction NIM possible), puis le hook, le raccourci, les fenêtres,
-        /// et enfin l'icône détenue. Chaque étape est tolérante aux pannes.
+        /// Fermeture ordonnée et idempotente : icône retirée d'abord, puis moteur
+        /// (hook), raccourci, fenêtres. Chaque étape est tolérante aux pannes.
         /// </summary>
         private void Exit()
         {
             if (_exiting) return;
             _exiting = true;
+            TearDown();
+            Application.Exit();
+        }
 
+        private void TearDown()
+        {
             try { _tray.Visible = false; } catch { }
             try { _engine.Dispose(); } catch { }
             try { _window.UnregisterHotkeySafe(); } catch { }
@@ -198,33 +179,25 @@ namespace MouseSmooth
                 }
             }
             catch { }
-
-            Application.Exit();
         }
 
-        /// <summary>
-        /// Icône systray générée à la volée (pointeur blanc sur pastille) :
-        /// bleue = utilisateur valide (natif), verte = actif, rouge = désactivé.
-        /// </summary>
-        private static Icon MakeIcon(bool enabled, bool validMode)
+        /// <summary>Icône générée à la volée : pointeur blanc sur pastille verte (actif) ou grise (natif).</summary>
+        private static Icon MakeIcon(bool enabled)
         {
             using (var bmp = new Bitmap(32, 32))
             using (var g = Graphics.FromImage(bmp))
             {
                 g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-                Color bg = validMode ? Color.FromArgb(31, 111, 235)
-                         : enabled   ? Color.FromArgb(46, 160, 67)
-                         : Color.FromArgb(170, 40, 40);
+                Color bg = enabled ? Color.FromArgb(46, 160, 67) : Color.FromArgb(110, 110, 110);
                 using (var brush = new SolidBrush(bg))
                     g.FillEllipse(brush, 1, 1, 30, 30);
-                using (var pen = new Pen(Color.White, 3f))
+                // Flèche de pointeur.
+                var arrow = new[]
                 {
-                    g.DrawLine(pen, 7, 9, 7, 23);                       // tige verticale
-                    g.DrawArc(pen, 2, 5, 10, 10, 180, 180);             // arrondi haut de la tige
-                    g.DrawLine(pen, 16, 8, 16, 23);                     // tige verticale
-                    g.DrawArc(pen, 11, 4, 10, 10, 180, 180);            // arrondi haut de la tige
-                    g.DrawLine(pen, 23, 12, 23, 23);                    // petite tige
-                }
+                    new Point(10, 6), new Point(10, 25), new Point(15, 20),
+                    new Point(19, 27), new Point(22, 25), new Point(18, 18), new Point(24, 18)
+                };
+                g.FillPolygon(Brushes.White, arrow);
                 return Icon.FromHandle(bmp.GetHicon());
             }
         }
@@ -233,22 +206,8 @@ namespace MouseSmooth
         {
             if (disposing && !_exiting)
             {
-                // Chemin de secours (disposition sans passage par Quitter) : le même
-                // démontage, protégé ; si Exit() a déjà tourné, rien à refaire.
-                try { _tray.Visible = false; } catch { }
-                try { _engine.Dispose(); } catch { }
-                try { _window.UnregisterHotkeySafe(); } catch { }
-                try { _tray.Dispose(); } catch { }
-                try
-                {
-                    if (_currentIcon != null)
-                    {
-                        NativeMethods.DestroyIcon(_currentIcon.Handle);
-                        _currentIcon.Dispose();
-                        _currentIcon = null;
-                    }
-                }
-                catch { }
+                _exiting = true;
+                TearDown();
             }
             base.Dispose(disposing);
         }

@@ -1,11 +1,12 @@
 using System;
+using System.Collections.Generic;
 
 namespace MouseSmooth
 {
     /// <summary>
-    /// Auto-test du filtre (mode --selftest, sans hook ni curseur réel) :
-    /// tremblement neutralisé, geste suivi, gains X/Y, seuil de tremblement
-    /// (verrouillage / déverrouillage), ré-ancrage sur saut externe.
+    /// Auto-test (mode --selftest) : simule une souris et un curseur, sans hook ni
+    /// curseur réel, et vérifie le filtre de bout en bout — y compris le calcul du
+    /// déplacement par rapport au curseur que l'on a soi-même placé.
     /// </summary>
     internal static class SelfTest
     {
@@ -17,148 +18,193 @@ namespace MouseSmooth
             if (!ok) _failures++;
         }
 
-        /// <summary>Tremblement sinusoïdal moyen nul (modèle simple de main qui tremble).</summary>
-        private static int Tremor(double tHz, double amplitude, int i)
+        /// <summary>
+        /// Simulation fidèle au fonctionnement réel : la souris envoie un événement
+        /// toutes les 8 ms (125 Hz) avec des déplacements entiers ; Windows propose
+        /// pt = curseur + déplacement ; le moteur bloque l'événement et place
+        /// lui-même le curseur à chaque pas de 4 ms.
+        /// </summary>
+        private sealed class Sim
         {
-            return (int)Math.Round(amplitude * Math.Sin(2 * Math.PI * tHz * i / 125.0));
+            public readonly MotionCore Core = new MotionCore();
+            public int CursorX, CursorY;
+            public double TimeMs;
+            private int _tick, _lastHandX, _lastHandY;
+
+            public Sim(SmoothConfig cfg, int x = 500, int y = 500)
+            {
+                Core.Configure(cfg);
+                CursorX = x; CursorY = y;
+                _lastHandX = x; _lastHandY = y;
+            }
+
+            /// <summary>Un pas de 4 ms, la main étant en (handX, handY) en px physiques.</summary>
+            public void Step(double handX, double handY)
+            {
+                TimeMs += TremorFilter.TickMs;
+                if (_tick++ % 2 == 0)
+                {
+                    int hx = (int)Math.Round(handX), hy = (int)Math.Round(handY);
+                    int dx = hx - _lastHandX, dy = hy - _lastHandY;
+                    _lastHandX = hx; _lastHandY = hy;
+                    if (dx != 0 || dy != 0)
+                        Core.OnMove(CursorX + dx, CursorY + dy, CursorX, CursorY, TimeMs, 0, 0, 3839, 2159);
+                }
+                if (Core.Tick(out int x, out int y))
+                {
+                    CursorX = x; CursorY = y;
+                    Core.ConfirmOutput(x, y);
+                }
+            }
+
+            /// <summary>Recale la main (après un saut externe du curseur, par exemple).</summary>
+            public void SetHand(int x, int y) { _lastHandX = x; _lastHandY = y; }
         }
+
+        private static double Sin(double hz, double amplitude, double tMs, double phase = 0) =>
+            amplitude * Math.Sin(2 * Math.PI * hz * tMs / 1000.0 + phase);
+
+        private static SmoothConfig Cfg(double ms = 200, double reactivity = 0.5, double speed = 1, double click = 0) =>
+            new SmoothConfig { SmoothingMs = ms, Reactivity = reactivity, Speed = speed, ClickStabilizeMs = click };
 
         public static int Run()
         {
-            // 1. Tremblement en place (±6 px, 2,5 Hz effectif, 125 Hz) : le curseur
-            //    doit rester quasi immobile (seuil 30 px/s, lissage 0,8).
+            // 1. Main au repos, tremblement 5 Hz ±8 px sur les deux axes : avec une moyenne
+            //    de 200 ms (une période), le curseur doit rester quasi immobile.
             {
-                var cfg = new SmoothConfig { Smoothing = 0.8, DeadbandX = 3, DeadbandY = 3, GainX = 1, GainY = 1, TremorThreshold = 30 };
-                var s = FilterState.Anchored(500, 500, 0);
-                double maxDev = 0, finalDev = 0;
-                uint t = 0;
-                for (int i = 0; i < 2000; i++)
+                var sim = new Sim(Cfg(200));
+                double maxDev = 0;
+                for (int i = 0; i < 1500; i++)
                 {
-                    t += 8;
-                    int jx = Tremor(2.5, 6, i), jy = Tremor(3.1, 6, i);
-                    if (MouseFilter.Step(ref s, cfg, 500 + jx, 500 + jy, t, out int tx, out int ty))
+                    sim.Step(500 + Sin(5, 8, sim.TimeMs), 500 + Sin(5, 8, sim.TimeMs, 1.3));
+                    if (sim.TimeMs > 1000)
+                        maxDev = Math.Max(maxDev, Math.Max(Math.Abs(sim.CursorX - 500), Math.Abs(sim.CursorY - 500)));
+                }
+                Check($"Tremblement 5 Hz ±8 px au repos : curseur stable (écart max {maxDev} px <= 1)", maxDev <= 1);
+            }
+
+            // 2. Tremblement à une autre fréquence que celle réglée (4 Hz et 7 Hz mêlés).
+            {
+                var sim = new Sim(Cfg(200));
+                double maxDev = 0;
+                for (int i = 0; i < 1500; i++)
+                {
+                    double t = sim.TimeMs;
+                    sim.Step(500 + Sin(4, 6, t) + Sin(7, 4, t, 0.5), 500 + Sin(7, 6, t, 2) + Sin(4, 3, t));
+                    if (sim.TimeMs > 1000)
+                        maxDev = Math.Max(maxDev, Math.Max(Math.Abs(sim.CursorX - 500), Math.Abs(sim.CursorY - 500)));
+                }
+                Check($"Tremblement 4 + 7 Hz ±10 px : fortement atténué (écart max {maxDev} px <= 2)", maxDev <= 2);
+            }
+
+            // 3. Geste lent (100 px/s vers la droite) avec tremblement vertical 5 Hz ±6 px :
+            //    trajectoire droite, sans aller-retour.
+            {
+                var sim = new Sim(Cfg(200));
+                double maxY = 0;
+                bool monotonic = true;
+                int lastX = sim.CursorX;
+                for (int i = 0; i < 750; i++) // 3 s
+                {
+                    sim.Step(500 + 0.1 * sim.TimeMs, 500 + Sin(5, 6, sim.TimeMs));
+                    if (sim.CursorX < lastX) monotonic = false;
+                    lastX = sim.CursorX;
+                    if (sim.TimeMs > 500) maxY = Math.Max(maxY, Math.Abs(sim.CursorY - 500));
+                }
+                Check($"Geste lent avec tremblement : ligne droite (écart vertical {maxY} px <= 1, sans recul {monotonic})",
+                      maxY <= 1 && monotonic);
+            }
+
+            // 4. Arrêt : la main parcourt 300 px puis s'arrête. Le curseur arrive pile
+            //    au bon endroit, sans dépasser, peu après l'arrêt.
+            {
+                var sim = new Sim(Cfg(200));
+                int maxX = 0;
+                for (int i = 0; i < 250; i++) sim.Step(500 + 300.0 * Math.Min(1, sim.TimeMs / 1000.0), 500);
+                for (int i = 0; i < 125; i++) { sim.Step(800, 500); maxX = Math.Max(maxX, sim.CursorX); }
+                Check($"Fin de geste : arrivée exacte en 500 ms (x={sim.CursorX}, attendu 800, max {maxX})",
+                      sim.CursorX == 800 && sim.CursorY == 500 && maxX <= 800);
+            }
+
+            // 5. Réactivité : un grand geste rapide (2000 px/s) suit avec moins de retard
+            //    quand la réactivité est active.
+            {
+                double Lag(double reactivity)
+                {
+                    var sim = new Sim(Cfg(200, reactivity));
+                    for (int i = 0; i < 100; i++) sim.Step(500 + 2.0 * sim.TimeMs, 500); // 0,4 s
+                    return 500 + 2.0 * sim.TimeMs - sim.CursorX;
+                }
+                double slow = Lag(0), fast = Lag(1);
+                Check($"Réactivité : retard en grand geste réduit ({fast:0} px contre {slow:0} px)", fast < 0.6 * slow);
+            }
+
+            // 6. Vitesse : 100 px de main à vitesse 2 => 200 px de curseur.
+            {
+                var sim = new Sim(Cfg(200, 0.5, 2.0));
+                for (int i = 0; i < 125; i++) sim.Step(500 + Math.Min(100, 0.2 * sim.TimeMs), 500);
+                for (int i = 0; i < 150; i++) sim.Step(600, 500);
+                Check($"Vitesse ×2 appliquée (x={sim.CursorX}, attendu 700)", sim.CursorX == 700);
+            }
+
+            // 7. Stabilisation des clics : la secousse de 10 px juste après l'appui est
+            //    ignorée ; un mouvement après le délai passe normalement.
+            {
+                var sim = new Sim(Cfg(200, 0.5, 1, 150));
+                for (int i = 0; i < 10; i++) sim.Step(500, 500);
+                sim.Core.OnButton(sim.TimeMs);
+                for (int i = 0; i < 10; i++) sim.Step(510, 506);   // secousse pendant 40 ms
+                for (int i = 0; i < 150; i++) sim.Step(510, 506);
+                bool ignored = sim.CursorX == 500 && sim.CursorY == 500;
+                for (int i = 0; i < 25; i++) sim.Step(510 + 2 * i, 506);
+                for (int i = 0; i < 150; i++) sim.Step(558, 506);
+                Check($"Clic : secousse ignorée ({ignored}), mouvement suivant accepté (x={sim.CursorX}, attendu 548)",
+                      ignored && sim.CursorX == 548);
+            }
+
+            // 8. Déplacement externe du curseur (autre logiciel) : on repart de là, sans
+            //    ramener le curseur à l'ancienne position.
+            {
+                var sim = new Sim(Cfg(200));
+                for (int i = 0; i < 50; i++) sim.Step(500, 500);
+                sim.CursorX = 1500; sim.CursorY = 900; // déplacé par un autre programme
+                for (int i = 0; i < 150; i++) sim.Step(503, 500);
+                Check($"Déplacement externe respecté (x={sim.CursorX},{sim.CursorY}, attendu 1503,900)",
+                      sim.CursorX == 1503 && sim.CursorY == 900);
+            }
+
+            // 9. Changement de durée en plein geste : aucun saut du curseur.
+            {
+                var sim = new Sim(Cfg(200));
+                int maxStep = 0, prev = sim.CursorX;
+                for (int i = 0; i < 300; i++)
+                {
+                    if (i == 150) sim.Core.Configure(Cfg(400));
+                    sim.Step(500 + 0.3 * sim.TimeMs, 500);
+                    maxStep = Math.Max(maxStep, Math.Abs(sim.CursorX - prev));
+                    prev = sim.CursorX;
+                }
+                Check($"Changement de réglage en plein geste sans saut (pas max {maxStep} px <= 3)", maxStep <= 3);
+            }
+
+            // 10. Calibrage : fréquence et amplitude retrouvées malgré la dérive de la main.
+            {
+                var rnd = new Random(1);
+                foreach (double hz in new[] { 5.0, 8.0 })
+                {
+                    var samples = new List<(double X, double Y)>();
+                    for (int i = 0; i < 1500; i++)
                     {
-                        double dev = Math.Max(Math.Abs(tx - 500), Math.Abs(ty - 500));
-                        if (dev > maxDev) maxDev = dev;
-                        finalDev = dev;
+                        double t = i * TremorFilter.TickMs;
+                        samples.Add((Math.Round(300 + 0.01 * t + Sin(hz, 6, t) + rnd.NextDouble() - 0.5),
+                                     Math.Round(300 + Sin(hz, 3, t, 1))));
                     }
+                    var m = TremorAnalysis.Analyze(samples, TremorFilter.TickMs);
+                    double period = 1000 / hz;
+                    Check($"Calibrage {hz} Hz : mesuré {m.FrequencyHz:0.00} Hz, ±{m.AmplitudePx:0.0} px, moyenne {m.RecommendedMs} ms",
+                          Math.Abs(m.FrequencyHz - hz) < 0.3 && m.AmplitudePx > 5 && m.AmplitudePx < 7.5 &&
+                          Math.Abs(m.RecommendedMs - period) <= 8);
                 }
-                Check($"Tremblement neutralisé (écart max {maxDev:0.0} px <= 8, final {finalDev:0.0} <= 4)",
-                      maxDev <= 8 && finalDev <= 4);
-            }
-
-            // 2. Trajectoire lente et continue : le curseur suit, jamais en avance,
-            //    jamais de marche arrière ; la distance d'origine est préservée.
-            {
-                var cfg = new SmoothConfig { Smoothing = 0.6, DeadbandX = 2, DeadbandY = 2, GainX = 1, GainY = 1, TremorThreshold = 30 };
-                var s = FilterState.Anchored(500, 500, 0);
-                uint t = 0;
-                bool ok = true;
-                int lastTx = 500;
-                for (int i = 1; i <= 3000; i++)
-                {
-                    t += 8;
-                    MouseFilter.Step(ref s, cfg, 500 + i, 500, t, out int tx, out int ty);
-                    if (tx > 500 + i) ok = false;   // jamais en avance sur la consigne
-                    if (tx < lastTx) ok = false;    // jamais de marche arrière
-                    lastTx = tx;
-                    if (ty != 500) ok = false;
-                }
-                // Retard de lissage attendu (Tau=250 ms, mix adaptatif ~0,55 en fin de rampe).
-                Check($"Geste lent suivi (tx final {lastTx}, attendu 3450..3500)", ok && lastTx >= 3450 && lastTx <= 3500);
-            }
-
-            // 3. Sensibilité X != Y : un déplacement (100, 50) doit donner (200, 50) avec (2.0, 1.0).
-            {
-                var cfg = new SmoothConfig { Smoothing = 0.0, DeadbandX = 0, DeadbandY = 0, GainX = 2.0, GainY = 1.0, TremorThreshold = 0 };
-                var s = FilterState.Anchored(500, 500, 0);
-                int tx = 0, ty = 0;
-                for (int i = 1; i <= 100; i++)
-                    MouseFilter.Step(ref s, cfg, 500 + i, 500 + i / 2, (uint)(i * 8), out tx, out ty);
-                Check($"Gain X appliqué (tx={tx}, attendu 700)", Math.Abs(tx - 700) <= 2);
-                Check($"Gain Y appliqué (ty={ty}, attendu 550)", Math.Abs(ty - 550) <= 2);
-            }
-
-            // 4. Seuil de tremblement : un tremblement DOIT être gelé avec un seuil haut,
-            //    et un vrai geste (dérive soutenue) DOIT débloquer dès qu'il dépasse le seuil.
-            {
-                // 4a. Même tremblement qu'au test 1, mais seuil 200 px/s : vitesse
-                //     soutenue quasi nulle => curseur figé (déplacement net ~ 0).
-                var cfg = new SmoothConfig { Smoothing = 0.8, DeadbandX = 3, DeadbandY = 3, GainX = 1, GainY = 1, TremorThreshold = 200 };
-                var s = FilterState.Anchored(500, 500, 0);
-                uint t = 0;
-                int maxNet = 0;
-                for (int i = 0; i < 2000; i++)
-                {
-                    t += 8;
-                    int jx = Tremor(2.5, 6, i), jy = Tremor(3.1, 6, i);
-                    if (MouseFilter.Step(ref s, cfg, 500 + jx, 500 + jy, t, out int tx, out int ty))
-                        maxNet = Math.Max(maxNet, Math.Max(Math.Abs(tx - 500), Math.Abs(ty - 500)));
-                }
-                Check($"Seuil haut : tremblement figé (écart max {maxNet} px <= 3)", maxNet <= 3);
-
-                // 4b. Dérive lente soutenue (31 px/s, juste au-dessus du seuil 30) :
-                //     le curseur doit avancer (comportement natif sous le seuil figé).
-                var cfgOn = new SmoothConfig { Smoothing = 0.8, DeadbandX = 3, DeadbandY = 3, GainX = 1, GainY = 1, TremorThreshold = 30 };
-                var sOn = FilterState.Anchored(500, 500, 0);
-                t = 0;
-                int reached = 500;
-                for (int i = 0; i < 375; i++) // 3 s à 125 Hz
-                {
-                    t += 8;
-                    if (MouseFilter.Step(ref sOn, cfgOn, 500 + i / 4, 500, t, out int tx, out _))
-                        reached = Math.Max(reached, tx);
-                }
-                Check($"Geste au-dessus du seuil débloqué (avance {reached - 500} px >= 40)", reached - 500 >= 40);
-
-                // 4c. Même dérive, seuil 200 px/s : sous le seuil => quasi figé.
-                var cfgOff = new SmoothConfig { Smoothing = 0.8, DeadbandX = 3, DeadbandY = 3, GainX = 1, GainY = 1, TremorThreshold = 200 };
-                var sOff = FilterState.Anchored(500, 500, 0);
-                t = 0;
-                int drifted = 0;
-                for (int i = 0; i < 375; i++)
-                {
-                    t += 8;
-                    if (MouseFilter.Step(ref sOff, cfgOff, 500 + i / 4, 500, t, out int tx, out _))
-                        drifted = Math.Max(drifted, Math.Abs(tx - 500));
-                }
-                Check($"Geste sous le seuil maintenu filtré (dérive {drifted} px <= 12)", drifted <= 12);
-            }
-
-            // 5. Saut externe : ré-ancre immédiatement, même avec lissage maximal.
-            {
-                var cfg = new SmoothConfig { Smoothing = 0.95, DeadbandX = 20, DeadbandY = 20, GainX = 1, GainY = 1, TremorThreshold = 30 };
-                var s = FilterState.Anchored(500, 500, 0);
-                MouseFilter.Step(ref s, cfg, 520, 500, 8, out int tx1, out _);   // geste continu -> filtré
-                MouseFilter.Step(ref s, cfg, 1900, 500, 16, out int tx2, out _); // saut externe > 250 px
-                Check($"Geste continu filtré (tx1={tx1} < 520)", tx1 < 520);
-                Check($"Saut externe ré-ancré (tx2={tx2})", tx2 == 1900);
-            }
-
-            // 6. Reprise après trou temporel (> 1 s) : pas de saut résiduel.
-            {
-                var cfg = new SmoothConfig { Smoothing = 0.8, DeadbandX = 3, DeadbandY = 3, GainX = 1, GainY = 1, TremorThreshold = 30 };
-                var s = FilterState.Anchored(500, 500, 0);
-                MouseFilter.Step(ref s, cfg, 505, 500, 8, out _, out _);
-                MouseFilter.Step(ref s, cfg, 560, 500, 2500, out int tx, out _); // trou de 2,5 s
-                Check($"Trou temporel ré-ancré (tx={tx})", tx == 560);
-            }
-
-            // 7. Soupape anti-blocage : même avec un seuil très haut, une dérive
-            //    soutenue finit par ouvrir le suivi en force (à 2× le seuil d'écart).
-            {
-                var cfg = new SmoothConfig { Smoothing = 0.8, DeadbandX = 3, DeadbandY = 3, GainX = 1, GainY = 1, TremorThreshold = 100 };
-                var s = FilterState.Anchored(500, 500, 0);
-                uint t = 0;
-                int reached = 500;
-                for (int i = 0; i < 1250; i++) // 10 s à 125 Hz, dérive 60 px/s
-                {
-                    t += 8;
-                    if (MouseFilter.Step(ref s, cfg, 500 + i * 3 / 5, 500, t, out int tx, out _))
-                        reached = Math.Max(reached, tx);
-                }
-                Check($"Soupape anti-blocage : dérive soutenue finit par passer (avance {reached - 500} px >= 150)",
-                      reached - 500 >= 150);
             }
 
             Console.WriteLine(_failures == 0 ? "SELFTEST OK" : "SELFTEST FAILED");

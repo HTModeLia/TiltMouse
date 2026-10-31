@@ -7,61 +7,49 @@ namespace MouseSmooth
     /// <summary>Paramètres du lisseur, persistés côté utilisateur.</summary>
     internal sealed class SmoothConfig
     {
+        /// <summary>Lissage actif (sinon la souris est native, le filtre tourne en simulation).</summary>
         public bool Enabled { get; set; } = true;
 
         /// <summary>
-        /// Mode utilisateur valide : le hook RESTE installé mais aucun traitement
-        /// n'est appliqué (pass-through). Le profil tremblant est conservé intact
-        /// et revient dès la sortie du mode.
+        /// Durée de la moyenne glissante (ms). Idéalement égale à la période du
+        /// tremblement (200 ms pour 5 Hz) : le tremblement est alors annulé. Le
+        /// curseur suit la main avec un retard d'environ cette durée. 0 = natif.
         /// </summary>
-        public bool ValidMode { get; set; } = false;
-
-        /// <summary>Sensibilité axe X (1.0 = vitesse native).</summary>
-        public double GainX { get; set; } = 1.0;
-
-        /// <summary>Sensibilité axe Y (1.0 = vitesse native).</summary>
-        public double GainY { get; set; } = 1.0;
-
-        /// <summary>Force du lissage : 0 = natif, 0.95 = maximal.</summary>
-        public double Smoothing { get; set; } = 0.6;
+        public double SmoothingMs { get; set; } = 200.0;
 
         /// <summary>
-        /// Seuil de tremblement en pixels d'écart : en dessous, le déplacement est
-        /// assimilé à du tremblement et le curseur reste immobile ; au-delà, le suivi
-        /// reprend. Une soupape ouvre le suivi en force à 2× le seuil : un seuil trop
-        /// haut ralentit le départ mais ne peut jamais bloquer le curseur.
+        /// Réactivité aux gestes rapides (0..1) : pendant un grand déplacement, la
+        /// moyenne est raccourcie pour réduire le retard. 0 = moyenne toujours complète.
         /// </summary>
-        public double TremorThreshold { get; set; } = 30.0;
+        public double Reactivity { get; set; } = 0.5;
 
-        /// <summary>Bande morte X en pixels (micro-déplacements ignorés).</summary>
-        public double DeadbandX { get; set; } = 2.0;
+        /// <summary>Vitesse du curseur (1.0 = vitesse Windows).</summary>
+        public double Speed { get; set; } = 1.0;
 
-        /// <summary>Bande morte Y en pixels.</summary>
-        public double DeadbandY { get; set; } = 2.0;
+        /// <summary>
+        /// Stabilisation des clics (ms) : les mouvements de la main pendant cette
+        /// durée après un appui ou un relâchement de bouton sont ignorés (le geste
+        /// d'appuyer fait souvent bouger la souris). 0 = désactivé.
+        /// </summary>
+        public double ClickStabilizeMs { get; set; } = 120.0;
 
         public void Clamp()
         {
-            GainX = Math.Min(3.0, Math.Max(0.1, GainX));
-            GainY = Math.Min(3.0, Math.Max(0.1, GainY));
-            Smoothing = Math.Min(0.95, Math.Max(0.0, Smoothing));
-            // Au-delà de 120 px d'écart, un geste lent mettrait plus d'une seconde à
-            // partir : au-dessus, le seuil fait plus de mal que de bien.
-            TremorThreshold = Math.Min(120.0, Math.Max(0.0, TremorThreshold));
-            DeadbandX = Math.Min(20.0, Math.Max(0.0, DeadbandX));
-            DeadbandY = Math.Min(20.0, Math.Max(0.0, DeadbandY));
+            SmoothingMs = Math.Min(500.0, Math.Max(0.0, SmoothingMs));
+            Reactivity = Math.Min(1.0, Math.Max(0.0, Reactivity));
+            Speed = Math.Min(3.0, Math.Max(0.25, Speed));
+            ClickStabilizeMs = Math.Min(300.0, Math.Max(0.0, ClickStabilizeMs));
         }
 
-        public void ResetToDefaults()
+        public void ResetToDefaults() => CopyFrom(new SmoothConfig());
+
+        public void CopyFrom(SmoothConfig source)
         {
-            var d = new SmoothConfig();
-            Enabled = d.Enabled;
-            ValidMode = d.ValidMode;
-            GainX = d.GainX;
-            GainY = d.GainY;
-            Smoothing = d.Smoothing;
-            TremorThreshold = d.TremorThreshold;
-            DeadbandX = d.DeadbandX;
-            DeadbandY = d.DeadbandY;
+            Enabled = source.Enabled;
+            SmoothingMs = source.SmoothingMs;
+            Reactivity = source.Reactivity;
+            Speed = source.Speed;
+            ClickStabilizeMs = source.ClickStabilizeMs;
         }
 
         public SmoothConfig Clone() => (SmoothConfig)MemberwiseClone();
@@ -80,6 +68,7 @@ namespace MouseSmooth
             {
                 if (File.Exists(FilePath))
                 {
+                    // Les champs d'anciennes versions (seuil, bande morte…) sont ignorés.
                     var cfg = JsonSerializer.Deserialize<SmoothConfig>(File.ReadAllText(FilePath));
                     if (cfg != null)
                     {

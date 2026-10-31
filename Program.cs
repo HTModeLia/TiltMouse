@@ -25,6 +25,9 @@ namespace MouseSmooth
             AppDomain.CurrentDomain.UnhandledException += (s, e) =>
                 Log("AppDomain", e.ExceptionObject as Exception);
 
+            // Coordonnées physiques partout (hook, SetCursorPos, écrans à échelles
+            // différentes) : sans cela, Windows virtualiserait les positions.
+            Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
             Application.EnableVisualStyles();
             Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
             Application.ThreadException += (s, e) => Log("UIThread", e.Exception);

@@ -1,76 +1,95 @@
 # MouseSmooth
 
-Lisseur de curseur anti-tremblement pour Windows. L'application intercepte les
-déplacements de la souris (hook bas niveau), filtre le tremblement de la main et
-réinjecte une position stabilisée. Elle réside dans la zone de notification
-(systray), fonctionne pour l'utilisateur courant sans droits administrateur.
+Lisseur de curseur pour les personnes qui tremblent. MouseSmooth fait la
+**moyenne** du mouvement de la main sur une courte durée : le tremblement, qui
+oscille sur place, s'annule, tandis que le mouvement volontaire passe. Le
+curseur se déplace de manière fluide, comme pour une main qui ne tremble pas.
+
+L'application réside dans la zone de notification, fonctionne pour
+l'utilisateur courant et ne demande aucun droit administrateur.
 
 ## Compilation
 
-.NET Core 3.1 SDK (le projet cible `netcoreapp3.1` avec WinForms) :
+.NET Core 3.1 SDK (WinForms) :
 
 ```bat
 dotnet build -c Release
 ```
 
-L'exécutable est dans `bin\Release\netcoreapp3.1\` (`MouseSmooth.exe`, avec
-`MouseSmooth.dll` et le runtime à côté ; copier tout le dossier pour déployer).
+L'exécutable est dans `bin\Release\netcoreapp3.1\` (`MouseSmooth.exe` ; copier
+tout le dossier pour déployer).
 
 ## Utilisation
 
-Lancer `MouseSmooth.exe` : une icône apparaît dans le systray.
+Lancer `MouseSmooth.exe` : une icône apparaît dans la zone de notification.
 
-- **Pastille verte** : lissage actif — **rouge** : désactivé — **bleue** : mode
-  utilisateur valide (souris native, hook conservé).
-- **Menu contextuel** (clic droit) : case *Activé* (toggle), case
-  *Utilisateur valide*, *Réglages…*, *Calibrage…*, *Quitter*.
-- **Double-clic** sur l'icône : ouvrir les réglages.
-- **Ctrl+Alt+M** : bascule actif/inactif depuis n'importe quelle application.
+- **Pastille verte** : lissage actif. **Grise** : souris native.
+- **Ctrl+Alt+M** : active ou désactive le lissage depuis n'importe quelle
+  application (pour prêter la souris à une personne qui ne tremble pas).
+- **Clic droit** sur l'icône : *Lissage activé*, *Réglages…*, *Calibrage…*,
+  *Quitter*. **Double-clic** : réglages.
+
+Premier lancement conseillé : **Calibrage…**, puis ajuster si besoin dans les
+réglages.
 
 ## Réglages
 
-| Paramètre | Rôle | Plage |
+| Réglage | Effet | Défaut |
 |---|---|---|
-| Sensibilité X | gain appliqué aux deltas horizontaux (2.0 = distance doublée) | 0.1 – 3.0 |
-| Sensibilité Y | gain appliqué aux deltas verticaux | 0.1 – 3.0 |
-| Lissage | force du filtrage (0 = natif, 0.95 = très filtré) | 0 – 0.95 |
-| Seuil de tremblement | écart au-delà duquel le suivi reprend (en dessous : curseur figé) | 0 (désactivé) – 120 |
-| Bande morte X/Y | micro-déplacements résiduels ignorés (px) | 0 – 20 |
+| Durée de la moyenne | Le curseur suit la moyenne de la main sur cette durée. Idéal : une période du tremblement (200 ms pour 5 Hz). Plus long = plus stable mais plus de retard. 0 = aucun lissage. | 200 ms |
+| Réactivité aux grands gestes | Pendant un déplacement franc, la moyenne est raccourcie (÷4) pour réduire le retard. Le pointage lent reste entièrement lissé. | 50 % |
+| Vitesse du curseur | 1,00 = vitesse Windows. Plus lent = tremblement plus petit à l'écran. | 1,00 |
+| Stabilisation des clics | Les mouvements de la main sont ignorés pendant cette durée après chaque appui ou relâchement de bouton. | 120 ms |
 
-Les réglages s'appliquent en temps réel et sont persistés dans
+Les réglages s'appliquent en direct ; *OK* les enregistre dans
 `%APPDATA%\MouseSmooth\settings.json`.
 
-## Fonctionnement (architecture)
+La fenêtre de réglages montre les 2 dernières secondes du mouvement : en
+**orange** la main (avec son tremblement), en **vert** le curseur lissé.
+Quand le lissage est désactivé, le filtre tourne en simulation : on voit ce
+qu'il ferait, sans que la souris soit modifiée.
 
-1. **Hook `WH_MOUSE_LL`** installé sur le thread UI (une boucle de messages est
-   requise). Les événements `WM_MOUSEMOVE` non injectés sont interceptés ;
-   clics, molette et injections (autres logiciels d'automatisation) passent tels quels.
-2. **Filtre** (`MouseFilter.cs`) : les deltas bruts sont intégrés avec la
-   sensibilité par axe dans une position « virtuelle » V ; une position
-   « engagée » C poursuit V via un passe-bas (constante 250 ms) **seulement
-   quand l'écart V−C dépasse le seuil de tremblement** (porte avec hystérésis
-   spatiale et lissage temporel 120 ms). Le discriminant est le déplacement
-   résiduel, pas la vitesse : un tremblement (la main oscille sur place) garde
-   l'écart sous le seuil =&gt; C reste gelée et le curseur aussi ;un geste fait croître l'écart sans retour =&gt; la porte s'ouvre et C rattrape V
-progressivement, sans saut. La porte s'ouvre vite (60 ms) et se referme
-lentement (400 ms — mémoire de geste, les micro-pauses d'un geste lent ne
-replantent pas le filtre) ; une soupape force l'ouverture à 2× le seuil :
-un blocage durable du curseur est impossible, quel que soit le réglage ;
-3. **Vitesse d'origine préservée** : le mélange filtré/natif est adaptatif à la
-   vitesse — lent = très filtré (la main tremble surtout à l'arrêt), rapide =
-   quasiment natif. Le gain pointeur, le DPI et l'accélération Windows restent
-   inchangés : un geste rapide atteint exactement sa cible d'origine, le
-   lissage n'introduit qu'un léger délai, jamais une perte de distance ;
-4. **Bande morte** : les micro-corrections résiduelles ne sont pas appliquées.
-5. **Réinjection absolue** via `SetCursorPos` : position recalculée depuis la
-   position matérielle, donc aucune dérive cumulée. Un saut externe (autre
-   application, reprise de session) ou un trou temporel > 1 s ré-ancre le filtre
-   et laisse passer ce déplacement sans filtrage.
+## Calibrage
 
-Sécurités intégrées : tout le traitement est mono-thread (thread UI), les
-exceptions du hook sont neutralisées, et si `SetCursorPos` échoue de façon
-répétée (session verrouillée, bureau sécurisé) le lissage se désactive
-automatiquement avec une notification.
+La main repose sur la souris, détendue, sans chercher à bouger, pendant
+6 secondes. MouseSmooth mesure l'**amplitude** et la **fréquence** du
+tremblement (la dérive lente de la main est retirée), puis recommande une
+durée de moyenne égale à **une période du tremblement** : c'est la durée pour
+laquelle la moyenne annule exactement l'oscillation.
+
+## Fonctionnement
+
+1. **Interception** : un hook souris bas niveau (`WH_MOUSE_LL`) bloque les
+   déplacements physiques. Le déplacement de la main est la différence entre la
+   position que Windows propose et la position actuelle du curseur
+   (l'accélération Windows est donc conservée). Il est ajouté, multiplié par la
+   vitesse, à la **position voulue**. Clics, molette et mouvements simulés par
+   d'autres logiciels passent sans modification.
+2. **Moyenne glissante double** (`TremorFilter.cs`) : toutes les 4 ms (250 Hz),
+   la position voulue alimente deux moyennes glissantes de durée W en cascade
+   (pondération triangulaire). Un tremblement de période W et ses harmoniques
+   sont annulés ; les fréquences voisines sont atténuées de 95 % ou plus. Le
+   mouvement volontaire passe intact avec un retard d'environ W.
+3. **Réactivité** : le déplacement **net** sur la fenêtre mesure la vitesse
+   volontaire (un tremblement a un déplacement net quasi nul). Au-delà de
+   200 px/s, la sortie glisse progressivement vers une moyenne 4 fois plus
+   courte.
+4. **Placement** : le curseur est placé par `SetCursorPos` au pixel près, avec
+   une hystérésis de 0,7 px contre le scintillement. Quand la main s'arrête, la
+   moyenne converge exactement : le curseur arrive pile à l'endroit voulu.
+5. **Thread dédié** : hook et horloge tournent sur leur propre thread. Une
+   interface occupée ne peut ni retarder le curseur, ni faire retirer le hook
+   par Windows. Au repos, le thread dort (aucune consommation CPU).
+
+Sécurités : une exception dans le hook laisse passer l'événement ; un
+déplacement externe du curseur (autre logiciel, écran tactile) est respecté et
+le filtre repart de là ; si `SetCursorPos` échoue de façon répétée, le lissage
+se désactive avec une notification ; toute erreur non gérée est journalisée
+dans `%APPDATA%\MouseSmooth\error.log` et affichée au lancement suivant.
+
+Limite : Windows ne transmet pas les mouvements au-dessus d'une fenêtre lancée
+en administrateur à une application qui ne l'est pas. Pour lisser aussi sur ces
+fenêtres, lancer MouseSmooth en administrateur.
 
 ## Auto-test
 
@@ -78,67 +97,8 @@ automatiquement avec une notification.
 dotnet bin\Release\netcoreapp3.1\MouseSmooth.dll --selftest
 ```
 
-Vérifie, sans toucher au curseur réel : neutralisation d'un tremblement ±6 px,
-suivi d'un geste lent (distance d'origine préservée), application des gains X/Y,
-seuil de tremblement (figeage sous le seuil, déblocage au-dessus), ré-ancrage
-sur saut externe et sur trou temporel.
-
-## Mode utilisateur valide
-
-Pour prêter la souris à un utilisateur sans tremblement sans désactiver le
-hook : menu systray → *Utilisateur valide* (ou case dans les réglages). Le
-hook `WH_MOUSE_LL` reste installé — la bascule est instantanée, le calibrage
-et le visualiseur continuent de fonctionner — mais chaque événement est rendu
-au système sans le moindre traitement : la souris se comporte exactement comme
-sans MouseSmooth. Le profil tremblant (seuil, lissage, sensibilité, bande
-morte) est conservé intact et revient dès la sortie du mode.
-
-Dans ce mode, le filtre continue de tourner en **simulation** sur les
-mouvements réels (sans jamais toucher au curseur) : le visualiseur en croix
-montre ce que ferait le lissage — pratique pour régler le seuil ou comparer
-les réglages avec une main valide.
-
-## Calibrage assisté
-
-Menu systray → *Calibrage…* : posez la main sur la souris sans intention de
-mouvement ; après 3 s de préparation, le tremblement réel est mesuré pendant
-5 s sur les événements **bruts** du hook (avant tout lissage) : la mesure
-reflète le matériel, pas le comportement filtré. La dérive lente de la main
-est **détendrée** (régression linéaire par axe) : une main qui glisse
-légèrement pendant la mesure ne gonfle plus le seuil. L'assistant en déduit
-un seuil (40 % au-dessus du tremblement mesuré, plafonné à 120 px), un
-lissage et une bande morte, applicables en un clic — ils prennent effet
-immédiatement et sont persistés.
-
-Recommandation : ne bougez pas volontairement pendant la mesure (le résultat
-serait surestimé) ; recommencez si besoin.
-
-## Visualiseur en croix
-
-La fenêtre de réglages affiche une croix (axe X horizontal, axe Y vertical) :
-
-- le **disque gris** : position *engagée* C (ce que le filtre a validé) ;
-- le **triangle** : position *virtuelle* V (consigne matérielle) — orange
-  quand la porte est fermée (tremblement absorbé), vert en suivi natif ;
-- le **cercle bleu pointillé** : seuil de tremblement autour de C — V dedans
-  =&gt; gelé, V dehors =&gt; le suivi reprend ;
-- la colonne de droite : valeurs par axe (positions C/V, écart, ouverture de
-  porte) et rappel du seuil et de la soupape.
-
-Utilisation typique : main posée, le triangle reste orange dans le cercle et
-le curseur est immobile ; lors d'un geste, il passe vert et sort du cercle,
-le disque le rattrape. Si un geste lent part difficilement, baissez le seuil ;
-si la main posée fait glisser le curseur, augmentez-le. La soupape (ouverture
-forcée à 2× le seuil) garantit qu'un geste soutenu finit toujours par passer.
-
-## Réglage conseillé
-
-Le plus simple est l'assistant de calibrage (voir ci-dessus). Pour un réglage
-manuel :
-
-1. Mettre *Lissage* vers 0,8 et *Seuil de tremblement* à 0 ;
-2. monter progressivement le seuil jusqu'à ce que la main posée (sans intention
-   de mouvement) ne fasse plus bouger le curseur ;
-3. vérifier que les gestes lents restent possibles : un seuil trop haut donne
-   l'impression que le pointeur « glisse » au lieu de partir immédiatement ;
-4. ajuster *Sensibilité X/Y* en dernier (préférence de vitesse par axe).
+Simule une souris à 125 Hz et le curseur, puis vérifie : tremblement de 5 Hz
+±8 px annulé, tremblement 4 + 7 Hz atténué, geste lent rectiligne malgré le
+tremblement, arrivée exacte en fin de geste, réactivité, vitesse,
+stabilisation des clics, déplacement externe respecté, changement de réglage
+sans saut, et mesure de fréquence et d'amplitude du calibrage.
