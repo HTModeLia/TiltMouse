@@ -207,6 +207,40 @@ namespace MouseSmooth
                 }
             }
 
+            // 11. Journal : tremblement d'action mesuré PENDANT un geste lent (300 px en 3 s,
+            // profil naturel « minimum jerk »), puis au repos, puis geste sans tremblement.
+            {
+                var rnd = new Random(2);
+                List<(double X, double Y)> Segment(double travel, double hz, double amp)
+                {
+                    var s = new List<(double X, double Y)>();
+                    for (int i = 0; i < 750; i++)
+                    {
+                        double t = i * TremorFilter.TickMs, u = i / 749.0;
+                        double voluntary = travel * (10 * u * u * u - 15 * u * u * u * u + 6 * u * u * u * u * u);
+                        s.Add((Math.Round(400 + voluntary + Sin(hz, amp, t) + rnd.NextDouble() - 0.5),
+                               Math.Round(300 + 0.3 * voluntary + Sin(hz, amp / 2, t, 1))));
+                    }
+                    return s;
+                }
+
+                var (g, gSpeed) = TremorAnalysis.AnalyzeMotion(Segment(300, 6, 4), TremorFilter.TickMs);
+                Check($"Journal, geste lent + 6 Hz ±4 px : {g.FrequencyHz:0.00} Hz, ±{g.AmplitudePx:0.0} px, {gSpeed:0} px/s (geste)",
+                      Math.Abs(g.FrequencyHz - 6) < 0.4 && g.AmplitudePx > 3 && g.AmplitudePx < 5.5 &&
+                      gSpeed >= TremorJournal.RestBelowPxS && gSpeed < TremorJournal.GestureBelowPxS);
+
+                var (r, rSpeed) = TremorAnalysis.AnalyzeMotion(Segment(0, 5, 3), TremorFilter.TickMs);
+                Check($"Journal, repos + 5 Hz ±3 px : {r.FrequencyHz:0.00} Hz, ±{r.AmplitudePx:0.0} px, {rSpeed:0} px/s (repos)",
+                      Math.Abs(r.FrequencyHz - 5) < 0.4 && r.AmplitudePx > 2 && r.AmplitudePx < 4 &&
+                      rSpeed < TremorJournal.RestBelowPxS);
+
+                var (n, _) = TremorAnalysis.AnalyzeMotion(Segment(300, 6, 0), TremorFilter.TickMs);
+                Check($"Journal, geste sans tremblement : aucun tremblement inventé ({n.FrequencyHz:0.00} Hz, ±{n.AmplitudePx:0.0} px)",
+                      n.FrequencyHz == 0 || n.AmplitudePx < TremorJournal.MinAmplitudePx);
+
+                Check("Médiane", TremorJournal.Median(new[] { 3.0, 1, 2 }) == 2 && TremorJournal.Median(new[] { 4.0, 1, 2, 3 }) == 2.5);
+            }
+
             Console.WriteLine(_failures == 0 ? "SELFTEST OK" : "SELFTEST FAILED");
             return _failures == 0 ? 0 : 1;
         }

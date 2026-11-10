@@ -1,12 +1,13 @@
-<Project Sdk="Microsoft.NET.Sdk.WindowsDesktop">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <TargetFramework>netcoreapp3.1</TargetFramework>
+    <!-- .NET 10 LTS : Windows 10 (1607+) et Windows 11. -->
+    <TargetFramework>net10.0-windows</TargetFramework>
     <UseWindowsForms>true</UseWindowsForms>
     <AssemblyName>MouseSmooth</AssemblyName>
     <RootNamespace>MouseSmooth</RootNamespace>
-    <Version>2.0.0</Version>
+    <Version>2.1.0</Version>
     <Product>MouseSmooth</Product>
     <Description>Lisseur de curseur anti-tremblement : moyenne glissante du mouvement de la main (systray)</Description>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>

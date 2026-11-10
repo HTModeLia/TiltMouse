@@ -88,6 +88,54 @@ namespace MouseSmooth
             return new TremorMeasure(amplitude, frequency, recommended);
         }
 
+        /// <summary>
+        /// Segment enregistré pendant l'usage normal (journal) : le geste volontaire,
+        /// lent, est retiré par un passe-haut (V moins sa moyenne triangulaire centrée
+        /// de ~0,8 s, nulle à 2,5 Hz et au-delà) ; ce qui reste est analysé comme au
+        /// calibrage. Renvoie aussi la vitesse nette du segment (px/s) pour classer
+        /// repos / geste.
+        /// </summary>
+        public static (TremorMeasure Measure, double NetSpeedPxS) AnalyzeMotion(
+            IReadOnlyList<(double X, double Y)> samples, double dtMs)
+        {
+            int n = samples.Count;
+            int half = (int)Math.Round(200 / dtMs);          // boîte de ~400 ms (impaire)
+            if (n < 4 * half + 32) return (new TremorMeasure(0, 0, 0), 0);
+
+            double dx = samples[n - 1].X - samples[0].X, dy = samples[n - 1].Y - samples[0].Y;
+            double netSpeed = Math.Sqrt(dx * dx + dy * dy) / ((n - 1) * dtMs / 1000.0);
+
+            double[] x = HighPass(samples, p => p.X, half);
+            double[] y = HighPass(samples, p => p.Y, half);
+            var residual = new List<(double X, double Y)>(x.Length);
+            for (int i = 0; i < x.Length; i++) residual.Add((x[i], y[i]));
+            return (Analyze(residual, dtMs), netSpeed);
+        }
+
+        /// <summary>V moins deux moyennes glissantes centrées en cascade ; bords (2 × half) retirés.</summary>
+        private static double[] HighPass(IReadOnlyList<(double X, double Y)> samples,
+                                         Func<(double X, double Y), double> axis, int half)
+        {
+            int n = samples.Count;
+            var v = new double[n];
+            for (int i = 0; i < n; i++) v[i] = axis(samples[i]);
+            double[] once = Box(v, half), twice = Box(once, half);
+
+            var res = new double[n - 4 * half];
+            for (int i = 0; i < res.Length; i++) res[i] = v[i + 2 * half] - twice[i + 2 * half];
+            return res;
+        }
+
+        private static double[] Box(double[] v, int half)
+        {
+            var prefix = new double[v.Length + 1];
+            for (int i = 0; i < v.Length; i++) prefix[i + 1] = prefix[i] + v[i];
+            var r = new double[v.Length];
+            for (int i = half; i < v.Length - half; i++)
+                r[i] = (prefix[i + half + 1] - prefix[i - half]) / (2 * half + 1);
+            return r;
+        }
+
         private static double[] Detrend(IReadOnlyList<(double X, double Y)> samples, Func<(double X, double Y), double> axis)
         {
             int n = samples.Count;

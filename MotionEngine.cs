@@ -12,6 +12,12 @@ namespace MouseSmooth
         public float HandX, HandY, CursorX, CursorY;
     }
 
+    /// <summary>Mesure d'un segment de 3 s d'usage réel (journal du tremblement).</summary>
+    internal struct JournalSample
+    {
+        public double FrequencyHz, AmplitudePx, NetSpeedPxS;
+    }
+
     /// <summary>
     /// Moteur : hook souris bas niveau + horloge à 250 Hz, sur un THREAD DÉDIÉ.
     ///
@@ -30,12 +36,16 @@ namespace MouseSmooth
         private const int TraceCapacity = 500;       // 2 s à 250 Hz
         private const int RecordCapacity = 4000;     // 16 s à 250 Hz
         private const int MaxSetCursorFailures = 100;
+        private const int SegmentTicks = 750;        // 3 s à 250 Hz
+        private const int JournalCapacity = 5000;    // borne mémoire si le journal n'est jamais vidé
 
         private readonly MotionCore _core = new MotionCore();
         private readonly Stopwatch _clock = Stopwatch.StartNew();
         private readonly object _lock = new object();
         private readonly TracePoint[] _trace = new TracePoint[TraceCapacity];
         private readonly List<(double X, double Y)> _record = new List<(double X, double Y)>(RecordCapacity);
+        private readonly List<(double X, double Y)> _segment = new List<(double X, double Y)>(SegmentTicks);
+        private readonly List<JournalSample> _journal = new List<JournalSample>();
 
         private Thread _thread;
         private uint _threadId;
@@ -46,6 +56,7 @@ namespace MouseSmooth
         private SmoothConfig _pendingConfig;
         private volatile bool _enabled;
         private volatile bool _recording;
+        private volatile bool _journalOn;
 
         // État du thread moteur.
         private SmoothConfig _config = new SmoothConfig();
@@ -131,6 +142,20 @@ namespace MouseSmooth
             lock (_lock) return new List<(double X, double Y)>(_record);
         }
 
+        /// <summary>Journal du tremblement : mesure en continu pendant l'usage (lissage actif uniquement).</summary>
+        public void SetJournal(bool on) => _journalOn = on;
+
+        /// <summary>Renvoie et vide les mesures accumulées depuis le dernier appel.</summary>
+        public List<JournalSample> DrainJournal()
+        {
+            lock (_lock)
+            {
+                var result = new List<JournalSample>(_journal);
+                _journal.Clear();
+                return result;
+            }
+        }
+
         /// <summary>Copie la trace récente (du plus ancien au plus récent) : visualiseur.</summary>
         public void CopyTrace(List<TracePoint> destination)
         {
@@ -166,16 +191,42 @@ namespace MouseSmooth
             ready.Set();
             if (_hook == IntPtr.Zero) return;
 
-            NativeMethods.timeBeginPeriod(1); // horloge système à 1 ms : pas réguliers de 4 ms
+            // Pas réguliers de 4 ms. Timer haute résolution (Windows 10 1803+) : il reste
+            // précis sous Windows 11 même sans fenêtre visible, où timeBeginPeriod n'est
+            // plus garanti. Repli sur timeBeginPeriod pour les Windows 10 plus anciens.
+            IntPtr timer = NativeMethods.CreateWaitableTimerExW(IntPtr.Zero, null,
+                NativeMethods.CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, NativeMethods.TIMER_ALL_ACCESS);
+            bool highRes = timer != IntPtr.Zero;
+            if (!highRes)
+            {
+                timer = NativeMethods.CreateWaitableTimerExW(IntPtr.Zero, null, 0, NativeMethods.TIMER_ALL_ACCESS);
+                NativeMethods.timeBeginPeriod(1);
+            }
+            var handles = new[] { timer };
             try
             {
                 ApplyCommands();
                 while (true)
                 {
-                    uint timeout = _idle ? NativeMethods.INFINITE
-                                         : (uint)Math.Max(0, Math.Ceiling(_nextTickMs - NowMs));
-                    NativeMethods.MsgWaitForMultipleObjectsEx(0, IntPtr.Zero, timeout,
-                        NativeMethods.QS_ALLINPUT, NativeMethods.MWMO_INPUTAVAILABLE);
+                    if (_idle)
+                    {
+                        NativeMethods.MsgWaitForMultipleObjectsEx(0, null, NativeMethods.INFINITE,
+                            NativeMethods.QS_ALLINPUT, NativeMethods.MWMO_INPUTAVAILABLE);
+                    }
+                    else
+                    {
+                        double waitMs = _nextTickMs - NowMs;
+                        if (waitMs > 0)
+                        {
+                            long due = -(long)(waitMs * 10000); // relatif, en unités de 100 ns
+                            if (timer != IntPtr.Zero && NativeMethods.SetWaitableTimer(timer, ref due, 0, IntPtr.Zero, IntPtr.Zero, false))
+                                NativeMethods.MsgWaitForMultipleObjectsEx(1, handles, NativeMethods.INFINITE,
+                                    NativeMethods.QS_ALLINPUT, NativeMethods.MWMO_INPUTAVAILABLE);
+                            else
+                                NativeMethods.MsgWaitForMultipleObjectsEx(0, null, (uint)Math.Ceiling(waitMs),
+                                    NativeMethods.QS_ALLINPUT, NativeMethods.MWMO_INPUTAVAILABLE);
+                        }
+                    }
 
                     // Le hook est appelé par Windows pendant PeekMessage.
                     while (NativeMethods.PeekMessage(out NativeMethods.MSG msg, IntPtr.Zero, 0, 0, NativeMethods.PM_REMOVE))
@@ -191,7 +242,8 @@ namespace MouseSmooth
             {
                 NativeMethods.UnhookWindowsHookEx(_hook);
                 _hook = IntPtr.Zero;
-                NativeMethods.timeEndPeriod(1);
+                if (timer != IntPtr.Zero) NativeMethods.CloseHandle(timer);
+                if (!highRes) NativeMethods.timeEndPeriod(1);
             }
         }
 
@@ -227,6 +279,7 @@ namespace MouseSmooth
             {
                 _idle = false;
                 _nextTickMs = NowMs;
+                _segment.Clear(); // trou dans le temps : le segment n'est plus continu
             }
         }
 
@@ -282,6 +335,34 @@ namespace MouseSmooth
 
                 if (_recording && _record.Count < RecordCapacity)
                     _record.Add((_core.VX, _core.VY));
+            }
+
+            // Lissage coupé = souris souvent prêtée à quelqu'un d'autre : rien n'est mesuré.
+            if (_journalOn && _enabled) CollectSegment();
+            else _segment.Clear();
+        }
+
+        /// <summary>Accumule V ; tous les 3 s continus, analyse le segment (~50 µs).</summary>
+        private void CollectSegment()
+        {
+            _segment.Add((_core.VX, _core.VY));
+            if (_segment.Count < SegmentTicks) return;
+
+            var (m, netSpeed) = TremorAnalysis.AnalyzeMotion(_segment, TremorFilter.TickMs);
+            _segment.Clear();
+            // V est multiplié par la vitesse réglée : on revient aux pixels de la main.
+            double speed = Math.Max(0.01, _config.Speed);
+            // Main absente, aucune oscillation nette, ou simple bruit d'arrondi : rien à noter.
+            if (m.FrequencyHz <= 0 || m.AmplitudePx / speed < TremorJournal.MinAmplitudePx) return;
+            lock (_lock)
+            {
+                if (_journal.Count < JournalCapacity)
+                    _journal.Add(new JournalSample
+                    {
+                        FrequencyHz = m.FrequencyHz,
+                        AmplitudePx = m.AmplitudePx / speed,
+                        NetSpeedPxS = netSpeed / speed
+                    });
             }
         }
 

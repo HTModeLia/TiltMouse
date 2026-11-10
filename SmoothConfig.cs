@@ -33,6 +33,13 @@ namespace MouseSmooth
         /// </summary>
         public double ClickStabilizeMs { get; set; } = 120.0;
 
+        /// <summary>
+        /// Journal du tremblement (mesures chiffrées toutes les 10 min, désactivé par défaut).
+        /// Volontairement absent de <see cref="CopyFrom"/> : les réglages et le calibrage
+        /// (« Par défaut », « Annuler ») ne doivent pas l'activer ni le couper.
+        /// </summary>
+        public bool Journal { get; set; }
+
         public void Clamp()
         {
             SmoothingMs = Math.Min(500.0, Math.Max(0.0, SmoothingMs));

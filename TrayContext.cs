@@ -1,4 +1,6 @@
 using System;
+using System.Diagnostics;
+using System.IO;
 using System.Drawing;
 using System.Windows.Forms;
 
@@ -12,6 +14,7 @@ namespace MouseSmooth
     {
         private readonly SmoothConfig _config;
         private readonly MotionEngine _engine;
+        private readonly TremorJournal _journal;
         private readonly HiddenWindow _window;
         private readonly NotifyIcon _tray;
         private readonly ToolStripMenuItem _miEnabled;
@@ -22,6 +25,7 @@ namespace MouseSmooth
         public TrayContext()
         {
             _config = SettingsStore.Load();
+            Startup.RefreshPath();
 
             _window = new HiddenWindow();
             _window.HotkeyPressed += Toggle;
@@ -34,6 +38,9 @@ namespace MouseSmooth
                 try { _window.BeginInvoke((Action)OnEngineAutoDisabled); } catch { }
             };
 
+            _engine.SetJournal(_config.Journal);
+            _journal = new TremorJournal(_engine, _config);
+
             _tray = new NotifyIcon { Text = TrayText(), Visible = true };
             SwapIcon(MakeIcon(_config.Enabled));
             _tray.DoubleClick += (s, e) => ShowSettings();
@@ -45,6 +52,19 @@ namespace MouseSmooth
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add("Réglages…", null, (s, e) => ShowSettings());
             menu.Items.Add("Calibrage…", null, (s, e) => ShowCalibration());
+            var miStartup = new ToolStripMenuItem("Lancer au démarrage de Windows") { Checked = Startup.IsEnabled };
+            miStartup.Click += (s, e) => miStartup.Checked = Startup.Set(!miStartup.Checked);
+            menu.Items.Add(miStartup);
+            menu.Items.Add(new ToolStripSeparator());
+            var miJournal = new ToolStripMenuItem("Journal du tremblement") { Checked = _config.Journal };
+            miJournal.Click += (s, e) =>
+            {
+                _config.Journal = miJournal.Checked = !miJournal.Checked;
+                _engine.SetJournal(_config.Journal);
+                SettingsStore.Save(_config);
+            };
+            menu.Items.Add(miJournal);
+            menu.Items.Add("Ouvrir le journal", null, (s, e) => OpenJournal());
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add("Quitter", null, (s, e) => Exit());
             _tray.ContextMenuStrip = menu;
@@ -138,6 +158,24 @@ namespace MouseSmooth
             _settings.Activate();
         }
 
+        private void OpenJournal()
+        {
+            _journal.Flush(); // les mesures en cours apparaissent tout de suite
+            if (!File.Exists(TremorJournal.FilePath))
+            {
+                MessageBox.Show("Le journal est encore vide. Activez « Journal du tremblement » : une ligne " +
+                                "est ajoutée toutes les 10 minutes d'utilisation.",
+                    "MouseSmooth", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+            try { Process.Start(new ProcessStartInfo(TremorJournal.FilePath) { UseShellExecute = true }); }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Impossible d'ouvrir le journal : " + ex.Message + Environment.NewLine + TremorJournal.FilePath,
+                    "MouseSmooth", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+        }
+
         /// <summary>Désactivation de secours déclenchée par le moteur (curseur non repositionnable).</summary>
         private void OnEngineAutoDisabled()
         {
@@ -165,6 +203,7 @@ namespace MouseSmooth
         private void TearDown()
         {
             try { _tray.Visible = false; } catch { }
+            try { _journal.Dispose(); } catch { } // avant le moteur : dernières mesures écrites
             try { _engine.Dispose(); } catch { }
             try { _window.UnregisterHotkeySafe(); } catch { }
             try { _settings?.Close(); } catch { }
