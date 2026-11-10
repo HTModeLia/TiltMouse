@@ -241,6 +241,13 @@ namespace MouseSmooth
                 Check("Médiane", TremorJournal.Median(new[] { 3.0, 1, 2 }) == 2 && TremorJournal.Median(new[] { 4.0, 1, 2, 3 }) == 2.5);
             }
 
+            // 12. Mise à jour : lecture du tag GitHub et comparaison de versions.
+            Check($"Mise à jour : tags lus, version courante {UpdateCheck.Current}",
+                  UpdateCheck.ParseTag("v2.1.0") == new Version(2, 1, 0) &&
+                  UpdateCheck.ParseTag("v2.10") > UpdateCheck.ParseTag("v2.9.5") &&
+                  UpdateCheck.ParseTag("n'importe quoi") == null &&
+                  !(UpdateCheck.ParseTag("v" + UpdateCheck.Current) > UpdateCheck.Current));
+
             Console.WriteLine(_failures == 0 ? "SELFTEST OK" : "SELFTEST FAILED");
             return _failures == 0 ? 0 : 1;
         }

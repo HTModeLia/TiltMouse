@@ -7,7 +7,7 @@
     <UseWindowsForms>true</UseWindowsForms>
     <AssemblyName>MouseSmooth</AssemblyName>
     <RootNamespace>MouseSmooth</RootNamespace>
-    <Version>2.1.0</Version>
+    <Version>2.2.0</Version>
     <Product>MouseSmooth</Product>
     <Description>Lisseur de curseur anti-tremblement : moyenne glissante du mouvement de la main (systray)</Description>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>

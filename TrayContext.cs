@@ -18,6 +18,9 @@ namespace MouseSmooth
         private readonly HiddenWindow _window;
         private readonly NotifyIcon _tray;
         private readonly ToolStripMenuItem _miEnabled;
+        private readonly ToolStripMenuItem _miUpdate;
+        private readonly Timer _updateTimer = new Timer { Interval = 60 * 1000 }; // 1re vérification 1 min après le lancement
+        private bool _updateBalloon;  // la bulle affichée est celle de la mise à jour (clic → page)
         private SettingsForm _settings;
         private Icon _currentIcon;   // icône affichée (détenue par nous, jamais lue via _tray.Icon)
         private bool _exiting;       // garde : aucun callback visuel pendant la fermeture
@@ -66,8 +69,26 @@ namespace MouseSmooth
             menu.Items.Add(miJournal);
             menu.Items.Add("Ouvrir le journal", null, (s, e) => OpenJournal());
             menu.Items.Add(new ToolStripSeparator());
+            _miUpdate = new ToolStripMenuItem { Visible = false, Font = new Font(menu.Font, FontStyle.Bold) };
+            _miUpdate.Click += (s, e) => OpenReleasesPage();
+            menu.Items.Insert(0, _miUpdate);
             menu.Items.Add("Quitter", null, (s, e) => Exit());
             _tray.ContextMenuStrip = menu;
+            _tray.BalloonTipClicked += (s, e) => { if (_updateBalloon) OpenReleasesPage(); };
+
+            _updateTimer.Tick += async (s, e) =>
+            {
+                _updateTimer.Interval = 24 * 60 * 60 * 1000; // ensuite une fois par jour (PC rarement éteint)
+                Version newer = await UpdateCheck.FindNewerAsync();
+                if (newer == null || _exiting || _miUpdate.Visible) return;
+                _miUpdate.Text = $"Nouvelle version {newer} disponible…";
+                _miUpdate.Visible = true;
+                _updateBalloon = true;
+                _tray.ShowBalloonTip(8000, "MouseSmooth : nouvelle version",
+                    $"La version {newer} est disponible (vous avez la {UpdateCheck.Current}). " +
+                    "Cliquez ici pour la télécharger.", ToolTipIcon.Info);
+            };
+            _updateTimer.Start();
 
             if (!_window.RegisterToggleHotkey())
             {
@@ -176,6 +197,12 @@ namespace MouseSmooth
             }
         }
 
+        private static void OpenReleasesPage()
+        {
+            try { Process.Start(new ProcessStartInfo(UpdateCheck.ReleasesPage) { UseShellExecute = true }); }
+            catch { /* aucun navigateur : rien de plus à faire */ }
+        }
+
         /// <summary>Désactivation de secours déclenchée par le moteur (curseur non repositionnable).</summary>
         private void OnEngineAutoDisabled()
         {
@@ -183,6 +210,7 @@ namespace MouseSmooth
             _config.Enabled = false;
             RefreshVisuals();
             SettingsStore.Save(_config);
+            _updateBalloon = false;
             _tray.ShowBalloonTip(4000, "MouseSmooth désactivé",
                 "Le curseur n'a pas pu être repositionné de façon répétée (session verrouillée, " +
                 "bureau sécurisé…). Réactivez le lissage avec Ctrl+Alt+M.", ToolTipIcon.Warning);
@@ -203,6 +231,7 @@ namespace MouseSmooth
         private void TearDown()
         {
             try { _tray.Visible = false; } catch { }
+            try { _updateTimer.Dispose(); } catch { }
             try { _journal.Dispose(); } catch { } // avant le moteur : dernières mesures écrites
             try { _engine.Dispose(); } catch { }
             try { _window.UnregisterHotkeySafe(); } catch { }

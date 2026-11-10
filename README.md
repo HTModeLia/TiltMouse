@@ -40,6 +40,12 @@ Lancer `MouseSmooth.exe` : une icône apparaît dans la zone de notification.
 Premier lancement conseillé : **Calibrage…**, puis ajuster si besoin dans les
 réglages.
 
+**Mises à jour** : une minute après le lancement, puis une fois par jour,
+MouseSmooth demande à GitHub la dernière version publiée. Si elle est plus
+récente, une bulle le signale et le menu affiche *Nouvelle version
+disponible…* (clic : page de téléchargement). Rien n'est téléchargé ni
+installé automatiquement, et aucune donnée n'est envoyée.
+
 ## Réglages
 
 | Réglage | Effet | Défaut |
