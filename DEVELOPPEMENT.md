@@ -1,6 +1,7 @@
 # MouseSmooth : notes de développement
 
-Tout ce qu'il faut pour reprendre le projet à froid. Le [README](README.md)
+Tout ce qu'il faut pour reprendre le projet à froid (consignes pour les
+assistants IA : [AGENTS.md](AGENTS.md)). Le [README](README.md)
 décrit l'utilisation et le fonctionnement du filtre ; ce fichier couvre le
 contexte, le code, les pièges, la publication et la suite.
 
